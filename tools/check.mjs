@@ -84,7 +84,15 @@ function serve() {
       if (url.endsWith('/')) file = path.join(file, 'index.html');
       if (!file.startsWith(ROOT)) { res.writeHead(403); res.end(); return; }
       fs.readFile(file, (err, data) => {
-        if (err) { res.writeHead(404); res.end('not found'); return; }
+        if (err) {
+          // 和 GitHub Pages 一样：未知路径回落到 404.html
+          fs.readFile(path.join(ROOT, '404.html'), (e2, page) => {
+            if (e2) { res.writeHead(404); res.end('not found'); return; }
+            res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+            res.end(page);
+          });
+          return;
+        }
         res.writeHead(200, { 'Content-Type': MIME[path.extname(file)] || 'application/octet-stream' });
         res.end(data);
       });
@@ -129,6 +137,7 @@ class CDP {
 const PAGES = [
   { name: 'portal', url: '/index.html', viewport: { width: 1280, height: 940 } },
   { name: 'portal-mobile', url: '/index.html', viewport: { width: 400, height: 860 }, mobile: true },
+  { name: '404', url: '/not-a-real-page.html' },
   { name: 'breakout', url: '/games/breakout/index.html' },
   { name: 'invaders', url: '/games/invaders/index.html' },
   { name: 'snake', url: '/games/snake/index.html' },
@@ -306,7 +315,8 @@ async function main() {
 
     const value = probe.result?.value || {};
     const canvasOk = !value.canvas || value.canvas.error || value.canvas.lit > 0.02;
-    check(`${page.name} 无报错`, errors.length === 0, errors.slice(0, 3).join(' | '));
+    const relevant = page.name === '404' ? errors.filter((e) => !/404/.test(e)) : errors;
+    check(`${page.name} 无报错`, relevant.length === 0, relevant.slice(0, 3).join(' | '));
     check(`${page.name} 画面有内容`, !!canvasOk, value.canvas ? `lit=${(value.canvas.lit * 100).toFixed(1)}%` : 'no canvas');
     if (page.url.startsWith('/games')) {
       check(`${page.name} 加载了 CG`, !!value.hasCG);
@@ -437,7 +447,7 @@ async function main() {
         })
       };
     })()`);
-    check('flow 沿解法拖完整盘即过关', diag.solved === true, JSON.stringify(diag));
+    check('flow 沿解法拖完整盘即过关', diag.solved === true, diag.solved ? '' : JSON.stringify(diag));
   }
 
   // 三消：找一个能凑成三连的交换，点两下应该加分
