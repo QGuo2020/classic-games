@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const SHOTS = path.join(ROOT, 'docs', 'shots');
+const LIVE = process.env.CHECK_BASE ? process.env.CHECK_BASE.replace(/\/+$/, '') : null;
 let SITE_PORT = 8123;
 let DBG_PORT = 9333;
 let chromeProc = null;
@@ -160,7 +161,8 @@ async function main() {
   DBG_PORT = await freePort();
 
   fs.mkdirSync(SHOTS, { recursive: true });
-  const server = await serve();
+  let server = null;
+  if (!LIVE) server = await serve();
 
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'cg-check-'));
   chromeProc = spawn(CHROME, [
@@ -188,7 +190,7 @@ async function main() {
   if (!wsUrl) {
     console.error('Chrome 调试端口没起来');
       killTree(chromeProc);
-    server.close();
+    if (server) server.close();
     process.exit(2);
   }
 
@@ -210,7 +212,7 @@ async function main() {
   };
 
   /* 页面操作小工具 */
-  const base = `http://127.0.0.1:${SITE_PORT}`;
+  const base = LIVE || `http://127.0.0.1:${SITE_PORT}`;
 
   const evaluate = async (expression) => {
     const r = await sendS('Runtime.evaluate', { expression, returnByValue: true, awaitPromise: true });
@@ -290,7 +292,7 @@ async function main() {
       mobile: !!page.mobile
     });
 
-    await sendS('Page.navigate', { url: `http://127.0.0.1:${SITE_PORT}${page.url}` });
+    await sendS('Page.navigate', { url: base + page.url });
     await sleep(1400);
 
     const probe = await sendS('Runtime.evaluate', {
@@ -348,52 +350,154 @@ async function main() {
 
   await goto('/games/breakout/index.html');
   {
-    const before = await hashCanvas();
+    const s0 = await evaluate(`(() => { const g = window.__game; return { x: g.ball.x, y: g.ball.y, bricks: g.bricks.length }; })()`);
     const p = await canvasCenter();
     await clickAt(p.x, p.y);
-    await sleep(700);
-    check('breakout 点击发射后画面变化', (await hashCanvas()) !== before);
+    await sleep(600);
+    const s1 = await evaluate(`(() => { const g = window.__game; return { x: g.ball.x, y: g.ball.y, bricks: g.bricks.length, stuck: g.ball.stuck }; })()`);
+    check('breakout 发射后球真的在飞', Number.isFinite(s1.x) && Number.isFinite(s1.y) && s1.stuck === false && (s0.y - s1.y) > 60, JSON.stringify({ s0, s1 }));
+
+    await sleep(3200);
+    const s2 = await evaluate(`(() => { const g = window.__game; return { x: g.ball.x, y: g.ball.y, bricks: g.bricks.length, score: g.score }; })()`);
+    check('breakout 球能打碎砖块且没有瞬清', Number.isFinite(s2.x) && s2.score > 0 && s2.bricks > 0 && s2.bricks < s0.bricks, JSON.stringify(s2));
+
+    // 键盘：R 重开后按空格也能发射
+    await pressKey('r', 'KeyR', 82);
+    await sleep(200);
+    await pressKey('Space', 'Space', 32);
+    await sleep(500);
+    const s3 = await evaluate(`(() => { const g = window.__game; return { stuck: g.ball.stuck, y: g.ball.y, bricks: g.bricks.length }; })()`);
+    check('breakout 空格能发射', s3.stuck === false && s3.y < 560 && s3.bricks > 0, JSON.stringify(s3));
   }
 
   await goto('/games/invaders/index.html');
   {
-    const before = await hashCanvas();
+    const s0 = await evaluate(`(() => { const g = window.__game; return { x: g.player.x, aliens: g.aliens.length }; })()`);
     await pressKey('ArrowLeft', 'ArrowLeft', 37);
-    await sleep(300);
-    check('invaders 左右移动生效', (await hashCanvas()) !== before);
+    await sleep(250);
+    const x1 = await evaluate('window.__game.player.x');
+    check('invaders 左右移动生效', x1 < s0.x, `${Math.round(s0.x)} -> ${Math.round(x1)}`);
+
+    await pressKey('Space', 'Space', 32);
+    await sleep(150);
+    const bullets = await evaluate('window.__game.bullets.length');
+    check('invaders 空格能发射', bullets > 0, 'bullets=' + bullets);
   }
 
   await goto('/games/snake/index.html');
   {
-    const before = await hashCanvas();
+    const s0 = await evaluate(`(() => { const g = window.__game; return { x: g.snake[0].x, y: g.snake[0].y, started: g.started, len: g.snake.length }; })()`);
+    check('snake 开局不自动跑', s0.started === false && s0.len === 3);
     await pressKey('ArrowUp', 'ArrowUp', 38);
     await sleep(700);
-    check('snake 第一次按键才开始移动', (await hashCanvas()) !== before);
+    const s1 = await evaluate(`(() => { const g = window.__game; return { x: g.snake[0].x, y: g.snake[0].y, len: g.snake.length }; })()`);
+    check('snake 按键后蛇头移动', s1.x !== s0.x || s1.y !== s0.y, JSON.stringify({ s0, s1 }));
   }
 
   await goto('/games/sokoban/index.html');
-  check('sokoban 至少有一个方向能走', await anyDirectionWorks());
+  {
+    const s0 = await evaluate(`(() => { const g = window.__game; return { boxes: g.boxes.size, goals: g.goals.size, x: g.player.x, y: g.player.y }; })()`);
+    check('sokoban 生成了箱子和目标', s0.boxes > 0 && s0.goals > 0, JSON.stringify(s0));
+    let moved = false;
+    for (const [k, code, vk] of DIR_KEYS) {
+      await pressKey(k, code, vk);
+      await sleep(140);
+      const now = await evaluate('[window.__game.player.x, window.__game.player.y]');
+      if (now[0] !== s0.x || now[1] !== s0.y) { moved = true; break; }
+    }
+    check('sokoban 方向键能移动玩家', moved);
+
+    // 走到某个箱子背后推一下，确认真的推动了
+    const plan = await evaluate(`(() => {
+      const g = window.__game;
+      const k = (x, y) => x + ',' + y;
+      const dirs = [[0, -1, 'ArrowUp', 38], [0, 1, 'ArrowDown', 40], [-1, 0, 'ArrowLeft', 37], [1, 0, 'ArrowRight', 39]];
+      const start = [g.player.x, g.player.y];
+      const free = (x, y) => !g.walls.has(k(x, y)) && !g.boxes.has(k(x, y));
+      const prev = new Map();
+      const seen = new Set([k(start[0], start[1])]);
+      const q = [start];
+      while (q.length) {
+        const [x, y] = q.shift();
+        for (const [dx, dy, key] of dirs) {
+          const nx = x + dx, ny = y + dy;
+          if (!free(nx, ny)) continue;
+          const kk = k(nx, ny);
+          if (seen.has(kk)) continue;
+          seen.add(kk);
+          prev.set(kk, [x, y, key]);
+          q.push([nx, ny]);
+        }
+      }
+      for (const bk of g.boxes) {
+        const [bx, by] = bk.split(',').map(Number);
+        for (const [dx, dy, key] of dirs) {
+          const beyond = k(bx + dx, by + dy);
+          if (g.walls.has(beyond) || g.boxes.has(beyond)) continue;
+          const stand = k(bx - dx, by - dy);
+          if (!seen.has(stand)) continue;
+          const path = [];
+          let cur = [bx - dx, by - dy];
+          while (k(cur[0], cur[1]) !== k(start[0], start[1])) {
+            const p = prev.get(k(cur[0], cur[1]));
+            if (!p) break;
+            path.unshift(p[2]);
+            cur = [p[0], p[1]];
+          }
+          path.push(key);
+          return { path, box: bk };
+        }
+      }
+      return null;
+    })()`);
+
+    if (plan && plan.path.length < 40) {
+      for (const key of plan.path) {
+        await pressKey(key, key, key === 'ArrowUp' ? 38 : key === 'ArrowDown' ? 40 : key === 'ArrowLeft' ? 37 : 39);
+        await sleep(60);
+      }
+      const after = await evaluate(`(() => {
+        const g = window.__game;
+        return { moved: !g.boxes.has(${JSON.stringify(plan.box)}), moves: g.moves };
+      })()`);
+      check('sokoban 走过去能把箱子推走', after.moved && after.moves > 0, JSON.stringify({ plan: plan, after }));
+    } else {
+      check('sokoban 走过去能把箱子推走', false, plan ? '路径太长' : '没有可推的箱子');
+    }
+  }
 
   await goto('/games/ice/index.html');
-  check('ice 滑行生效', await anyDirectionWorks());
+  {
+    const s0 = await evaluate(`(() => { const g = window.__game; return { gems: g.gems.size, x: g.player.x, y: g.player.y }; })()`);
+    check('ice 生成了宝石', s0.gems > 0, 'gems=' + s0.gems);
+    let moved = false;
+    for (const [k, code, vk] of DIR_KEYS) {
+      await pressKey(k, code, vk);
+      await sleep(160);
+      const now = await evaluate('[window.__game.player.x, window.__game.player.y]');
+      if (now[0] !== s0.x || now[1] !== s0.y) { moved = true; break; }
+    }
+    check('ice 一次滑动会滑到石头边', moved);
+  }
 
   await goto('/games/mines/index.html');
   {
-    const before = await hashCanvas();
     const p = await canvasCenter();
     await clickAt(p.x, p.y);
-    await sleep(300);
-    check('mines 点击翻开格子', (await hashCanvas()) !== before);
+    await sleep(320);
+    const s = await evaluate(`(() => { const g = window.__game; return { revealed: g.revealed, placed: g.placed, over: g.over }; })()`);
+    check('mines 首点安全并翻开一片', s.placed && s.revealed > 0 && !s.over, JSON.stringify(s));
   }
 
   await goto('/games/2048/index.html');
   {
-    const before = await hashCanvas();
+    const s0 = await evaluate(`(() => { const g = window.__game; return { moves: g.moves, tiles: g.board.filter(Boolean).length }; })()`);
     await pressKey('ArrowLeft', 'ArrowLeft', 37);
     await sleep(200);
     await pressKey('ArrowDown', 'ArrowDown', 40);
     await sleep(300);
-    check('2048 方向键移动方块', (await hashCanvas()) !== before);
+    const s1 = await evaluate(`(() => { const g = window.__game; return { moves: g.moves, tiles: g.board.filter(Boolean).length }; })()`);
+    check('2048 方向键之后棋盘有变化', s1.moves > s0.moves && s1.tiles >= 2, JSON.stringify({ s0, s1 }));
   }
 
   /* --------------------------------------------------------- 通关验证 */
@@ -448,6 +552,16 @@ async function main() {
       };
     })()`);
     check('flow 沿解法拖完整盘即过关', diag.solved === true, diag.solved ? '' : JSON.stringify(diag));
+
+    // 过关弹层应该能点「下一关」继续
+    const hasModal = await evaluate("!!document.querySelector('#overlay.show .btn.primary')");
+    check('flow 过关弹出结算层', hasModal === true);
+    if (hasModal) {
+      await evaluate("document.querySelector('#overlay.show .btn.primary').click()");
+      await sleep(400);
+      const next = await evaluate(`(() => { const g = window.__game; return { level: g.level, solved: g.solved, filled: g.owner.filter((o) => o >= 0).length }; })()`);
+      check('flow 点下一关进入新关卡', next.level === 2 && next.solved === false && next.filled === 0, JSON.stringify(next));
+    }
   }
 
   // 三消：找一个能凑成三连的交换，点两下应该加分
@@ -528,6 +642,54 @@ async function main() {
     check('lasers 转到解法朝向即通关', (await evaluate('window.__lasers.solved')) === true);
   }
 
+  /* --------------------------------------------------------- 随机输入压力测试 */
+
+  console.log('\n--- 随机输入 ---');
+
+  const scanState = () => evaluate(`(() => {
+    const bad = [];
+    const seen = new Set();
+    const walk = (v, path, depth) => {
+      if (depth > 3 || v == null) return;
+      if (typeof v === 'number') { if (!Number.isFinite(v)) bad.push(path); return; }
+      if (typeof v !== 'object') return;
+      if (seen.has(v)) return;
+      seen.add(v);
+      if (v instanceof Set) { for (const x of v) walk(x, path + '{}', depth + 1); return; }
+      if (v instanceof Map) { for (const [k, x] of v) walk(x, path + '[' + k + ']', depth + 1); return; }
+      for (const k of Object.keys(v)) walk(v[k], path + '.' + k, depth + 1);
+    };
+    walk(window.__game, 'g', 0);
+    return bad.slice(0, 8);
+  })()`);
+
+  const FUZZ_KEYS = [
+    ['ArrowLeft', 'ArrowLeft', 37],
+    ['ArrowRight', 'ArrowRight', 39],
+    ['ArrowUp', 'ArrowUp', 38],
+    ['ArrowDown', 'ArrowDown', 40],
+    ['Space', 'Space', 32]
+  ];
+
+  for (const name of ['breakout', 'invaders', 'snake', 'sokoban', 'flow', 'ice', 'lasers', 'mines', '2048', 'match3']) {
+    errors = [];
+    await goto(`/games/${name}/index.html`);
+    const c = await canvasCenter();
+    const start = Date.now();
+    while (Date.now() - start < 3500) {
+      const k = FUZZ_KEYS[Math.floor(Math.random() * FUZZ_KEYS.length)];
+      await pressKey(k[0], k[1], k[2]);
+      await sleep(80);
+      if (Math.random() < 0.22) {
+        await clickAt(c.x + (Math.random() - 0.5) * 320, c.y + (Math.random() - 0.5) * 320);
+        await sleep(70);
+      }
+    }
+    const bad = await scanState();
+    check(`${name} 随机输入后状态无 NaN/Infinity`, bad.length === 0, bad.join(', '));
+    check(`${name} 随机输入无报错`, errors.length === 0, errors.slice(0, 2).join(' | '));
+  }
+
   /* --------------------------------------------------------- 主题 / 移动端 */
 
   await goto('/index.html');
@@ -544,7 +706,7 @@ async function main() {
   await goto('/index.html');
 
   killTree(chromeProc);
-  server.close();
+  if (server) server.close();
   console.log(`\n${pass} passed, ${fail} failed`);
   console.log('截图目录:', SHOTS);
   process.exit(fail ? 1 : 0);

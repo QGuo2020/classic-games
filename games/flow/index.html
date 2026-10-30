@@ -482,6 +482,8 @@
   $('btnClear').addEventListener('click', clearAll);
   window.__flow = g;
   $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
+
+  window.__game = g;
 })();
 </script>
 </body>

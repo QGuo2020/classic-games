@@ -366,6 +366,8 @@
 
   $('btnMode').addEventListener('click', () => setFlagMode(!g.flagMode));
   $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
+
+  window.__game = g;
 })();
 </script>
 </body>

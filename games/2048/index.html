@@ -332,6 +332,8 @@
   CG.util.swiper(canvas, (dir) => move(dir), 22);
 
   $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
+
+  window.__game = g;
 })();
 </script>
 </body>

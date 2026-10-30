@@ -152,18 +152,18 @@
     const cy = CG.util.clamp(b.y, r.y, r.y + r.h);
     const dx = b.x - cx, dy = b.y - cy;
     const d2 = dx * dx + dy * dy;
-    if (d2 > b.r * b.r) return null;
+    if (d2 > R * R) return null;
     if (d2 > 0.0001) {
       const d = Math.sqrt(d2);
-      return { nx: dx / d, ny: dy / d, pen: b.r - d };
+      return { nx: dx / d, ny: dy / d, pen: R - d };
     }
     const left = b.x - r.x, right = r.x + r.w - b.x;
     const top = b.y - r.y, bottom = r.y + r.h - b.y;
     const m = Math.min(left, right, top, bottom);
-    if (m === left) return { nx: -1, ny: 0, pen: left + b.r };
-    if (m === right) return { nx: 1, ny: 0, pen: right + b.r };
-    if (m === top) return { nx: 0, ny: -1, pen: top + b.r };
-    return { nx: 0, ny: 1, pen: bottom + b.r };
+    if (m === left) return { nx: -1, ny: 0, pen: left + R };
+    if (m === right) return { nx: 1, ny: 0, pen: right + R };
+    if (m === top) return { nx: 0, ny: -1, pen: top + R };
+    return { nx: 0, ny: 1, pen: bottom + R };
   }
 
   function bounce(b, hit) {
@@ -447,6 +447,8 @@
     buildLevel(g.level);
     if (g.level > 1) CG.ui.toast('从第 ' + g.level + ' 关继续');
   })();
+
+  window.__game = g;
 })();
 </script>
 </body>

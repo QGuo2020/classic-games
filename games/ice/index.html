@@ -386,6 +386,8 @@
 
   $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
   $('btnUndo').addEventListener('click', undo);
+
+  window.__game = g;
 })();
 </script>
 </body>

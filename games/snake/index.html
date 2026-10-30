@@ -390,6 +390,8 @@
 
   $('btnRestart').addEventListener('click', () => { if (!busy) { g.lives = 3; buildLevel(g.level); } });
   $('btnPause').addEventListener('click', togglePause);
+
+  window.__game = g;
 })();
 </script>
 </body>
