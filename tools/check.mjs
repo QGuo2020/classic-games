@@ -148,7 +148,8 @@ const PAGES = [
   { name: 'lasers', url: '/games/lasers/index.html' },
   { name: 'mines', url: '/games/mines/index.html' },
   { name: '2048', url: '/games/2048/index.html' },
-  { name: 'match3', url: '/games/match3/index.html' }
+  { name: 'match3', url: '/games/match3/index.html' },
+  { name: 'sudoku', url: '/games/sudoku/index.html' }
 ];
 
 async function main() {
@@ -382,6 +383,27 @@ async function main() {
     await sleep(150);
     const bullets = await evaluate('window.__game.bullets.length');
     check('invaders 空格能发射', bullets > 0, 'bullets=' + bullets);
+
+    // 难度：第一波规模、是否有装甲兵、火力密度
+    const w1 = await evaluate(`(() => { const g = window.__game; return { aliens: g.aliens.length, armored: g.aliens.filter((a) => a.hp > 1).length }; })()`);
+    check('invaders 第一波至少 24 个外星人', w1.aliens >= 24, JSON.stringify(w1));
+    check('invaders 第一波没有装甲兵', w1.armored === 0);
+
+    const w3 = await evaluate(`(() => {
+      const g = window.__game;
+      g.debugWave(3);
+      return { aliens: g.aliens.length, armored: g.aliens.filter((a) => a.hp > 1).length };
+    })()`);
+    check('invaders 第三波出现装甲兵', w3.armored > 0, JSON.stringify(w3));
+
+    await evaluate('window.__game.debugWave(1)');
+    let maxBombs = 0;
+    for (let i = 0; i < 16; i++) {
+      await sleep(200);
+      const n = await evaluate('window.__game.bombs.length');
+      if (n > maxBombs) maxBombs = n;
+    }
+    check('invaders 火力密度足够（同时有多颗炸弹）', maxBombs >= 2, 'max=' + maxBombs);
   }
 
   await goto('/games/snake/index.html');
@@ -500,6 +522,69 @@ async function main() {
     check('2048 方向键之后棋盘有变化', s1.moves > s0.moves && s1.tiles >= 2, JSON.stringify({ s0, s1 }));
   }
 
+  await goto('/games/sudoku/index.html');
+  {
+    const s0 = await evaluate(`(() => {
+      const g = window.__game;
+      const cells = new Set();
+      let ok = true;
+      for (let i = 0; i < 81; i++) {
+        const v = g.solution[i];
+        if (v < 1 || v > 9) { ok = false; break; }
+        const x = i % 9, y = (i / 9) | 0, b = Math.floor(y / 3) * 3 + Math.floor(x / 3);
+        if (cells.has('r' + y + v) || cells.has('c' + x + v) || cells.has('b' + b + v)) { ok = false; break; }
+        cells.add('r' + y + v); cells.add('c' + x + v); cells.add('b' + b + v);
+      }
+      let given = 0;
+      for (let i = 0; i < 81; i++) if (g.given[i]) given++;
+      return { ok, given, level: g.level };
+    })()`);
+    check('sudoku 生成合法终盘', s0.ok === true, JSON.stringify(s0));
+    check('sudoku 难度线索数量合理', s0.given >= 27 && s0.given <= 50, 'given=' + s0.given);
+
+    // 点一个空格 + 按键填数
+    const spot = await evaluate(`(() => {
+      const g = window.__game;
+      const c = document.querySelector('canvas');
+      const r = c.getBoundingClientRect();
+      const padH = document.getElementById('pad').getBoundingClientRect().height + 10;
+      const availH = Math.max(140, r.height - padH);
+      const size = Math.min(r.width - 16, availH - 10);
+      const ox = (r.width - size) / 2;
+      const oy = Math.max(6, (availH - size) / 2);
+      const cell = size / 9;
+      let target = -1;
+      for (let i = 0; i < 81; i++) if (!g.given[i]) { target = i; break; }
+      const x = target % 9, y = (target / 9) | 0;
+      return { x: r.left + ox + x * cell + cell / 2, y: r.top + oy + y * cell + cell / 2, target, answer: g.solution[target] };
+    })()`);
+
+    await clickAt(spot.x, spot.y);
+    await sleep(80);
+    await pressKey(String(spot.answer), 'Digit' + spot.answer, 48 + spot.answer);
+    await sleep(150);
+    const filled = await evaluate(`window.__game.value[${spot.target}]`);
+    check('sudoku 点格子后用数字键填数', filled === spot.answer, `${filled} vs ${spot.answer}`);
+
+    await pressKey('z', 'KeyZ', 90);
+    await sleep(120);
+    const undone = await evaluate(`window.__game.value[${spot.target}]`);
+    check('sudoku 撤销能清掉刚填的数', undone === 0);
+
+    // 填满整盘应该立刻过关并弹出结算层
+    await evaluate('window.__game.debugSolve()');
+    await sleep(350);
+    check('sudoku 填满即过关', (await evaluate('window.__game.solved')) === true);
+    const hasModal = await evaluate("!!document.querySelector('#overlay.show .btn.primary')");
+    check('sudoku 过关弹出结算层', hasModal === true);
+    if (hasModal) {
+      await evaluate("document.querySelector('#overlay.show .btn.primary').click()");
+      await sleep(400);
+      const next = await evaluate(`(() => { const g = window.__game; return { level: g.level, solved: g.solved }; })()`);
+      check('sudoku 点下一关进入新关卡', next.level === 2 && next.solved === false, JSON.stringify(next));
+    }
+  }
+
   /* --------------------------------------------------------- 通关验证 */
 
   // 一笔画：按生成器的解法整条拖一遍，应该直接铺满过关
@@ -562,6 +647,21 @@ async function main() {
       const next = await evaluate(`(() => { const g = window.__game; return { level: g.level, solved: g.solved, filled: g.owner.filter((o) => o >= 0).length }; })()`);
       check('flow 点下一关进入新关卡', next.level === 2 && next.solved === false && next.filled === 0, JSON.stringify(next));
     }
+
+    // 线全连通但没铺满：必须说清楚差在哪，而不是静默不结束
+    await evaluate(`(() => {
+      const g = window.__game;
+      g.paths = g.colors.map((col) => [col.a.slice(), col.b.slice()]);
+      g.owner.fill(-1);
+      g.debugCheck();
+    })()`);
+    await sleep(200);
+    const warn = await evaluate(`(() => ({
+      solved: window.__game.solved,
+      hud: document.getElementById('hudFill').textContent,
+      toast: !!document.querySelector('.toast')
+    }))()`);
+    check('flow 线全连通但没铺满时提示还差几格', warn.solved === false && /缺/.test(warn.hud) && warn.toast === true, JSON.stringify(warn));
   }
 
   // 三消：找一个能凑成三连的交换，点两下应该加分
@@ -671,7 +771,7 @@ async function main() {
     ['Space', 'Space', 32]
   ];
 
-  for (const name of ['breakout', 'invaders', 'snake', 'sokoban', 'flow', 'ice', 'lasers', 'mines', '2048', 'match3']) {
+  for (const name of ['breakout', 'invaders', 'snake', 'sokoban', 'flow', 'ice', 'lasers', 'mines', '2048', 'match3', 'sudoku']) {
     errors = [];
     await goto(`/games/${name}/index.html`);
     const c = await canvasCenter();
@@ -702,6 +802,8 @@ async function main() {
   await shot('match3-mobile');
   await goto('/games/sokoban/index.html', { width: 400, height: 800 }, true);
   await shot('sokoban-mobile');
+  await goto('/games/sudoku/index.html', { width: 400, height: 800 }, true);
+  await shot('sudoku-mobile');
 
   await goto('/index.html');
 

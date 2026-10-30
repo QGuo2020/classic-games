@@ -15,7 +15,7 @@
   <header class="hero">
     <div>
       <div class="brand-mark">Classic Arcade</div>
-      <h1>十个<em>经典小游戏</em>，<br>点开就能玩。</h1>
+      <h1>十一个<em>经典小游戏</em>，<br>点开就能玩。</h1>
       <p>纯原生 JavaScript + Canvas，零依赖、零构建、无需联网。每个游戏都是闯关制：清掉一关，下一关更难一点。</p>
     </div>
     <div class="hero-side">
@@ -25,7 +25,7 @@
   </header>
 
   <nav class="filters" id="filters" aria-label="分类筛选">
-    <button class="chip" data-cat="all" aria-pressed="true">全部 <span id="countAll">10</span></button>
+    <button class="chip" data-cat="all" aria-pressed="true">全部 <span id="countAll">11</span></button>
     <button class="chip" data-cat="arcade" aria-pressed="false">街机动作</button>
     <button class="chip" data-cat="puzzle" aria-pressed="false">益智解谜</button>
     <button class="chip" data-cat="casual" aria-pressed="false">休闲消除</button>
@@ -95,6 +95,27 @@
       <p class="card-desc">每关一张新迷宫，吃满目标长度才算过关。别咬到自己，也别撞墙。</p>
       <div class="card-foot">
         <span class="tag" data-progress="snake">无限关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/sudoku/index.html" data-cat="puzzle" data-slug="sudoku">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3.5" y="3.5" width="17" height="17" rx="2"/>
+            <path d="M9.2 3.5v17M14.8 3.5v17M3.5 9.2h17M3.5 14.8h17" stroke-opacity=".5"/>
+            <path d="M6.4 6.4h1.2M6.4 11.1h1.2M11.6 6.4h1.2M11.6 12.3h1.2M17 10.9h1.2M11.7 17.2h1.2" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">数独</div>
+          <div class="card-en">Sudoku</div>
+        </div>
+      </div>
+      <p class="card-desc">9×9 数独，每关线索更少。支持笔记模式和提示，填满整盘即过关。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="sudoku">无限关卡</span>
         <span class="play">开始</span>
       </div>
     </a>

@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>数独 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+<style>
+  .pad {
+    position: absolute;
+    left: 0; right: 0; top: 0;
+    display: flex; flex-wrap: wrap; justify-content: center;
+    gap: 6px;
+    padding: 0 10px;
+    z-index: 3;
+  }
+  .pad button {
+    width: 36px; height: 36px;
+    border-radius: 9px;
+    border: 1px solid var(--line-bright);
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text);
+    font-family: var(--font-mono);
+    font-size: 15px;
+    line-height: 1;
+  }
+  .pad button:hover { border-color: var(--accent); color: var(--accent); }
+  .pad button.erase { color: var(--text-muted); }
+  .pad button.done { opacity: 0.3; }
+  @media (max-width: 520px) {
+    .pad { gap: 4px; bottom: 4px; }
+    .pad button { width: 30px; height: 30px; font-size: 13px; }
+  }
+</style>
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">数独<small>Sudoku</small></div>
+  <div class="hud">
+    <span class="stat">关卡<b id="hudLevel">1</b></span>
+    <span class="stat">用时<b id="hudTime">0:00</b></span>
+    <span class="stat">错误<b id="hudMistakes">0</b></span>
+    <span class="stat">提示<b id="hudHints">3</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div class="pad" id="pad"></div>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnNotes">笔记 <kbd>N</kbd></button>
+  <button class="btn" id="btnUndo">撤销 <kbd>Z</kbd></button>
+  <button class="btn" id="btnHint">提示 <kbd>H</kbd></button>
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <span class="spacer"></span>
+  <span class="note">点格子后按 1-9，或点下方数字</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const padEl = document.getElementById('pad');
+  const $ = (id) => document.getElementById(id);
+  const hud = {
+    level: $('hudLevel'), time: $('hudTime'),
+    mistakes: $('hudMistakes'), hints: $('hudHints')
+  };
+
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  const N = 9;
+  const ALL = 0x3FE;                    // 位 1..9
+
+  let W = 0, H = 0, ctx = null;
+  let busy = false;
+
+  const g = {
+    level: 1,
+    puzzle: new Uint8Array(81),
+    solution: new Uint8Array(81),
+    value: new Uint8Array(81),
+    given: new Uint8Array(81),
+    notes: new Array(81).fill(null).map(() => new Set()),
+    sel: -1,
+    notesMode: false,
+    mistakes: 0,
+    hintsLeft: 3,
+    started: false,
+    startTime: 0,
+    elapsed: 0,
+    history: [],
+    solved: false
+  };
+
+  const prog = CG.progress('sudoku');
+  g.level = Math.max(1, prog.level);
+
+  const boxOf = (x, y) => Math.floor(y / 3) * 3 + Math.floor(x / 3);
+
+  /* -------------------------------------------------- 生成 */
+
+  function rngShuffle(arr, rnd) {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(rnd() * (i + 1));
+      const t = arr[i]; arr[i] = arr[j]; arr[j] = t;
+    }
+    return arr;
+  }
+
+  function popcount(v) {
+    let c = 0;
+    while (v) { v &= v - 1; c++; }
+    return c;
+  }
+
+  function makeSolution(rnd) {
+    const grid = new Uint8Array(81);
+    const rows = new Uint16Array(9), cols = new Uint16Array(9), boxes = new Uint16Array(9);
+
+    function dfs(pos) {
+      if (pos === 81) return true;
+      const x = pos % 9, y = (pos / 9) | 0, b = boxOf(x, y);
+      const used = rows[y] | cols[x] | boxes[b];
+      const cands = [];
+      for (let v = 1; v <= 9; v++) if (!(used & (1 << v))) cands.push(v);
+      rngShuffle(cands, rnd);
+
+      for (const v of cands) {
+        const bit = 1 << v;
+        grid[pos] = v;
+        rows[y] |= bit; cols[x] |= bit; boxes[b] |= bit;
+        if (dfs(pos + 1)) return true;
+        rows[y] &= ~bit; cols[x] &= ~bit; boxes[b] &= ~bit;
+        grid[pos] = 0;
+      }
+      return false;
+    }
+
+    dfs(0);
+    return grid;
+  }
+
+  /** 数解个数，最多数到 limit 就返回（用于保证唯一解） */
+  function countSolutions(grid, limit) {
+    const rows = new Uint16Array(9), cols = new Uint16Array(9), boxes = new Uint16Array(9);
+    for (let i = 0; i < 81; i++) {
+      const v = grid[i];
+      if (!v) continue;
+      const x = i % 9, y = (i / 9) | 0, b = boxOf(x, y);
+      const bit = 1 << v;
+      rows[y] |= bit; cols[x] |= bit; boxes[b] |= bit;
+    }
+
+    let count = 0;
+    let stop = false;
+
+    function dfs() {
+      let best = -1, bestMask = 0, bestCount = 10;
+
+      for (let i = 0; i < 81; i++) {
+        if (grid[i]) continue;
+        const x = i % 9, y = (i / 9) | 0, b = boxOf(x, y);
+        const mask = ALL & ~(rows[y] | cols[x] | boxes[b]);
+        const c = popcount(mask);
+        if (c === 0) return;
+        if (c < bestCount) {
+          best = i; bestMask = mask; bestCount = c;
+          if (c === 1) break;
+        }
+      }
+
+      if (best < 0) { count++; stop = count >= limit; return; }
+
+      const x = best % 9, y = (best / 9) | 0, b = boxOf(x, y);
+      for (let v = 1; v <= 9; v++) {
+        const bit = 1 << v;
+        if (!(bestMask & bit)) continue;
+        grid[best] = v;
+        rows[y] |= bit; cols[x] |= bit; boxes[b] |= bit;
+        dfs();
+        rows[y] &= ~bit; cols[x] &= ~bit; boxes[b] &= ~bit;
+        grid[best] = 0;
+        if (stop) return;
+      }
+    }
+
+    dfs();
+    return count;
+  }
+
+  function makePuzzle(solution, clues, rnd) {
+    const puzzle = Uint8Array.from(solution);
+    const order = [];
+    for (let i = 0; i < 81; i++) order.push(i);
+    rngShuffle(order, rnd);
+
+    let left = 81;
+    for (const i of order) {
+      if (left <= clues) break;
+      const keep = puzzle[i];
+      puzzle[i] = 0;
+      if (countSolutions(Uint8Array.from(puzzle), 2) === 1) left--;
+      else puzzle[i] = keep;
+    }
+    return puzzle;
+  }
+
+  function cluesForLevel(n) {
+    return Math.max(27, 46 - (n - 1) * 2);
+  }
+
+  /* -------------------------------------------------- 关卡 */
+
+  function buildLevel(n, salt) {
+    const rnd = CG.util.rng(((n * 7919 + (salt || 0) * 104729 + 7) >>> 0) || 1);
+    const solution = makeSolution(rnd);
+    const puzzle = makePuzzle(solution, cluesForLevel(n), rnd);
+
+    g.level = n;
+    g.solution = solution;
+    g.puzzle = puzzle;
+    g.value = Uint8Array.from(puzzle);
+    g.given = new Uint8Array(81);
+    for (let i = 0; i < 81; i++) g.given[i] = puzzle[i] ? 1 : 0;
+    g.notes = new Array(81).fill(null).map(() => new Set());
+    g.sel = -1;
+    g.notesMode = false;
+    g.mistakes = 0;
+    g.hintsLeft = 3;
+    g.started = false;
+    g.startTime = 0;
+    g.elapsed = 0;
+    g.history = [];
+    g.solved = false;
+
+    $('btnNotes').classList.remove('primary');
+    syncHud();
+    syncPad();
+  }
+
+  function syncHud() {
+    hud.level.textContent = g.level;
+    hud.time.textContent = fmtTime(g.elapsed);
+    hud.mistakes.textContent = g.mistakes;
+    hud.mistakes.className = g.mistakes ? 'danger' : '';
+    hud.hints.textContent = g.hintsLeft;
+  }
+
+  function fmtTime(s) {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return m + ':' + String(sec).padStart(2, '0');
+  }
+
+  function digitCount(d) {
+    let c = 0;
+    for (let i = 0; i < 81; i++) if (g.value[i] === d) c++;
+    return c;
+  }
+
+  function syncPad() {
+    Array.from(padEl.children).forEach((btn) => {
+      const d = Number(btn.dataset.n);
+      if (!d) return;
+      btn.classList.toggle('done', digitCount(d) >= 9);
+    });
+  }
+
+  /* -------------------------------------------------- 冲突与输入 */
+
+  function conflictsAt(i) {
+    const v = g.value[i];
+    if (!v) return false;
+    const x = i % 9, y = (i / 9) | 0, b = boxOf(x, y);
+    for (let k = 0; k < 81; k++) {
+      if (k === i) continue;
+      const v2 = g.value[k];
+      if (v2 !== v) continue;
+      const x2 = k % 9, y2 = (k / 9) | 0;
+      if (y2 === y || x2 === x || boxOf(x2, y2) === b) return true;
+    }
+    return false;
+  }
+
+  function startTimer() {
+    if (g.started) return;
+    g.started = true;
+    g.startTime = performance.now() - g.elapsed * 1000;
+  }
+
+  function pushHistory(i) {
+    g.history.push({
+      i,
+      value: g.value[i],
+      notes: new Set(g.notes[i])
+    });
+    if (g.history.length > 200) g.history.shift();
+  }
+
+  function setCell(i, d) {
+    if (busy || g.solved || i < 0 || g.given[i]) return;
+    startTimer();
+
+    if (g.notesMode) {
+      pushHistory(i);
+      if (g.value[i]) g.value[i] = 0;
+      if (g.notes[i].has(d)) g.notes[i].delete(d);
+      else g.notes[i].add(d);
+      CG.sfx.move();
+      syncPad();
+      return;
+    }
+
+    pushHistory(i);
+    g.value[i] = g.value[i] === d ? 0 : d;
+    g.notes[i].clear();
+
+    if (g.value[i] && conflictsAt(i)) {
+      g.mistakes += 1;
+      CG.sfx.bad();
+      if (navigator.vibrate) navigator.vibrate(20);
+    } else if (g.value[i]) {
+      CG.sfx.ok();
+    }
+
+    syncHud();
+    syncPad();
+    checkWin();
+  }
+
+  function eraseCell(i) {
+    if (busy || g.solved || i < 0 || g.given[i]) return;
+    pushHistory(i);
+    g.value[i] = 0;
+    g.notes[i].clear();
+    CG.sfx.click();
+    syncPad();
+  }
+
+  function undo() {
+    if (busy || !g.history.length) return;
+    const h = g.history.pop();
+    g.value[h.i] = h.value;
+    g.notes[h.i] = new Set(h.notes);
+    g.solved = false;
+    CG.sfx.click();
+    syncPad();
+  }
+
+  function useHint() {
+    if (busy || g.solved) return;
+    if (g.hintsLeft <= 0) { CG.ui.toast('提示次数用完了'); return; }
+
+    let target = g.sel;
+    if (target < 0 || g.given[target] || g.value[target] === g.solution[target]) {
+      target = -1;
+      for (let i = 0; i < 81; i++) if (!g.given[i] && g.value[i] !== g.solution[i]) { target = i; break; }
+    }
+    if (target < 0) return;
+
+    pushHistory(target);
+    g.value[target] = g.solution[target];
+    g.notes[target].clear();
+    g.hintsLeft -= 1;
+    g.sel = target;
+    CG.sfx.ok();
+    syncHud();
+    syncPad();
+    checkWin();
+  }
+
+  function checkWin() {
+    if (g.solved) return;
+    for (let i = 0; i < 81; i++) if (g.value[i] !== g.solution[i]) return;
+    g.solved = true;
+    winLevel();
+  }
+
+  async function winLevel() {
+    if (busy) return;
+    busy = true;
+    CG.sfx.win();
+    const n = g.level;
+    const secs = Math.round(g.elapsed);
+    prog.reach(n + 1);
+    prog.win(Math.max(0, 6000 - secs * 10 - g.mistakes * 100));
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 关 · 完成',
+      text: '用时 <b>' + fmtTime(secs) + '</b>，错误 <b>' + g.mistakes + '</b> 次<br>下一关线索更少。',
+      actions: [
+        { label: '下一关', value: 'next', primary: true },
+        { label: '重玩本关', value: 'again' }
+      ]
+    });
+    busy = false;
+    buildLevel(r === 'next' ? n + 1 : n);
+  }
+
+  /* -------------------------------------------------- 绘制 */
+
+  function geo() {
+    const reserve = 46;
+    const availH = Math.max(120, H - reserve);
+    const size = Math.min(W - 16, availH - 12, 600);
+    return {
+      size,
+      ox: (W - size) / 2,
+      oy: Math.max(6, (availH - size) / 2),
+      cell: size / 9
+    };
+  }
+
+  function draw() {
+    const c = CG.colors();
+    const { size, ox, oy, cell } = geo();
+
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    // 棋盘底
+    ctx.fillStyle = c.light ? 'rgba(255,255,255,0.7)' : 'rgba(164,190,225,0.05)';
+    ctx.fillRect(ox, oy, size, size);
+
+    const selX = g.sel >= 0 ? g.sel % 9 : -1;
+    const selY = g.sel >= 0 ? (g.sel / 9) | 0 : -1;
+    const selVal = g.sel >= 0 ? g.value[g.sel] : 0;
+
+    // 高亮：整行整列同宫
+    if (g.sel >= 0) {
+      ctx.fillStyle = c.accentSoft;
+      for (let i = 0; i < 81; i++) {
+        if (i === g.sel) continue;
+        const x = i % 9, y = (i / 9) | 0;
+        if (x === selX || y === selY || boxOf(x, y) === boxOf(selX, selY)) {
+          ctx.fillRect(ox + x * cell, oy + y * cell, cell, cell);
+        }
+      }
+      // 相同数字
+      if (selVal) {
+        ctx.fillStyle = c.light ? 'rgba(11,143,120,0.18)' : 'rgba(93,242,208,0.16)';
+        for (let i = 0; i < 81; i++) {
+          if (i === g.sel) continue;
+          if (g.value[i] === selVal) ctx.fillRect(ox + (i % 9) * cell, oy + ((i / 9) | 0) * cell, cell, cell);
+        }
+      }
+      // 选中格
+      ctx.fillStyle = c.light ? 'rgba(11,143,120,0.24)' : 'rgba(93,242,208,0.22)';
+      ctx.fillRect(ox + selX * cell, oy + selY * cell, cell, cell);
+    }
+
+    // 细线
+    ctx.strokeStyle = c.line;
+    ctx.lineWidth = 1;
+    for (let i = 0; i <= 9; i++) {
+      ctx.beginPath();
+      ctx.moveTo(ox + i * cell, oy);
+      ctx.lineTo(ox + i * cell, oy + size);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(ox, oy + i * cell);
+      ctx.lineTo(ox + size, oy + i * cell);
+      ctx.stroke();
+    }
+
+    // 3x3 粗线
+    ctx.strokeStyle = c.lineStrong;
+    ctx.lineWidth = Math.max(2, cell * 0.045);
+    for (let i = 0; i <= 3; i++) {
+      ctx.beginPath();
+      ctx.moveTo(ox + i * 3 * cell, oy);
+      ctx.lineTo(ox + i * 3 * cell, oy + size);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(ox, oy + i * 3 * cell);
+      ctx.lineTo(ox + size, oy + i * 3 * cell);
+      ctx.stroke();
+    }
+
+    // 数字
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+
+    for (let i = 0; i < 81; i++) {
+      const x = i % 9, y = (i / 9) | 0;
+      const cx = ox + x * cell + cell / 2;
+      const cy = oy + y * cell + cell / 2 + 1;
+
+      if (g.value[i]) {
+        const bad = conflictsAt(i) && !g.given[i];
+        ctx.fillStyle = g.given[i] ? c.text : bad ? c.danger : c.accent;
+        ctx.font = (g.given[i] ? '600 ' : '500 ') + Math.round(cell * 0.5) + 'px ' + getComputedStyle(document.body).fontFamily;
+        ctx.fillText(String(g.value[i]), cx, cy);
+        continue;
+      }
+
+      const notes = g.notes[i];
+      if (notes.size) {
+        ctx.font = '500 ' + Math.round(cell * 0.19) + 'px ' + getComputedStyle(document.body).fontFamily;
+        ctx.fillStyle = c.muted;
+        for (const d of notes) {
+          const nx = (d - 1) % 3, ny = Math.floor((d - 1) / 3);
+          ctx.fillText(String(d), ox + x * cell + cell * (0.2 + nx * 0.3), oy + y * cell + cell * (0.22 + ny * 0.3));
+        }
+      }
+    }
+  }
+
+  /* -------------------------------------------------- 循环 */
+
+  CG.loop(() => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildLevel(g.level);
+    }
+    if (g.started && !g.solved) {
+      g.elapsed = (performance.now() - g.startTime) / 1000;
+      hud.time.textContent = fmtTime(g.elapsed);
+    }
+    const box = geo();
+    padEl.style.top = Math.round(box.oy + box.size + 8) + 'px';
+    draw();
+  });
+
+  /* -------------------------------------------------- 输入 */
+
+  function cellAt(e) {
+    const { ox, oy, cell } = geo();
+    const r = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - r.left - ox) / cell);
+    const y = Math.floor((e.clientY - r.top - oy) / cell);
+    if (x < 0 || y < 0 || x >= 9 || y >= 9) return -1;
+    return y * 9 + x;
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (busy) return;
+    const i = cellAt(e);
+    if (i < 0) return;
+    g.sel = i;
+    CG.sfx.click();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    const k = e.key;
+
+    if (k >= '1' && k <= '9') {
+      if (g.sel >= 0) setCell(g.sel, Number(k));
+      e.preventDefault();
+      return;
+    }
+    if (k === '0' || k === 'Backspace' || k === 'Delete') {
+      if (g.sel >= 0) eraseCell(g.sel);
+      e.preventDefault();
+      return;
+    }
+    if (k === 'ArrowLeft' || k === 'ArrowRight' || k === 'ArrowUp' || k === 'ArrowDown') {
+      if (g.sel < 0) g.sel = 0;
+      const x = g.sel % 9, y = (g.sel / 9) | 0;
+      const nx = CG.util.clamp(x + (k === 'ArrowLeft' ? -1 : k === 'ArrowRight' ? 1 : 0), 0, 8);
+      const ny = CG.util.clamp(y + (k === 'ArrowUp' ? -1 : k === 'ArrowDown' ? 1 : 0), 0, 8);
+      g.sel = ny * 9 + nx;
+      e.preventDefault();
+      return;
+    }
+    if (k === 'n' || k === 'N') toggleNotes();
+    if (k === 'z' || k === 'Z') undo();
+    if (k === 'h' || k === 'H') useHint();
+    if (k === 'r' || k === 'R') { if (!busy) buildLevel(g.level, 5); }
+  });
+
+  function toggleNotes() {
+    g.notesMode = !g.notesMode;
+    $('btnNotes').classList.toggle('primary', g.notesMode);
+    $('btnNotes').innerHTML = (g.notesMode ? '笔记开' : '笔记') + ' <kbd>N</kbd>';
+    CG.sfx.click();
+  }
+
+  // 数字键盘
+  for (let d = 1; d <= 9; d++) {
+    const b = document.createElement('button');
+    b.dataset.n = String(d);
+    b.textContent = String(d);
+    b.addEventListener('click', () => { if (g.sel >= 0) setCell(g.sel, d); });
+    padEl.appendChild(b);
+  }
+  const eraseBtn = document.createElement('button');
+  eraseBtn.className = 'erase';
+  eraseBtn.textContent = '✕';
+  eraseBtn.addEventListener('click', () => { if (g.sel >= 0) eraseCell(g.sel); });
+  padEl.appendChild(eraseBtn);
+
+  $('btnNotes').addEventListener('click', toggleNotes);
+  $('btnUndo').addEventListener('click', undo);
+  $('btnHint').addEventListener('click', useHint);
+  $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level, 5); });
+
+  // 调试钩子：给自动化测试用
+  g.debugSolve = function () {
+    for (let i = 0; i < 81; i++) if (!g.given[i]) g.value[i] = g.solution[i];
+    syncHud();
+    syncPad();
+    checkWin();
+  };
+  window.__game = g;
+})();
+</script>
+</body>
+</html>

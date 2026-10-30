@@ -32,7 +32,7 @@
   <button class="btn" id="btnClear">清空 <kbd>C</kbd></button>
   <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
   <span class="spacer"></span>
-  <span class="note">从圆点按住拖动，连满整张网格即过关</span>
+  <span class="note">连线并铺满整张网格才算过关</span>
 </footer>
 
 <script src="../../assets/js/core.js"></script>
@@ -215,6 +215,8 @@
     g.owner = new Array(cols * rows).fill(-1);
     g.level = n;
     g.solved = false;
+    g.warned = false;
+    g.pulseUntil = 0;
     drag = null;
     syncHud();
   }
@@ -234,15 +236,43 @@
   function syncHud() {
     let done = 0;
     for (let i = 0; i < g.colors.length; i++) if (pairDone(i)) done++;
+    const total = g.cols * g.rows;
+    const filled = filledCount();
+    const gap = total - filled;
+
     hud.level.textContent = g.level;
     hud.pairs.textContent = done + '/' + g.colors.length;
-    hud.fill.textContent = Math.round((filledCount() / (g.cols * g.rows)) * 100) + '%';
+
+    if (done === g.colors.length && gap > 0) {
+      hud.fill.textContent = '缺 ' + gap + ' 格';
+      hud.fill.className = 'danger';
+    } else {
+      hud.fill.textContent = Math.round((filled / total) * 100) + '%';
+      hud.fill.className = '';
+    }
   }
 
   function checkWin() {
     if (g.solved) return;
-    if (filledCount() !== g.cols * g.rows) return;
-    for (let i = 0; i < g.colors.length; i++) if (!pairDone(i)) return;
+    const total = g.cols * g.rows;
+    const filled = filledCount();
+    let pairs = 0;
+    for (let i = 0; i < g.colors.length; i++) if (pairDone(i)) pairs++;
+
+    // 线都连上了但还有空格：明确告诉玩家差在哪，别让人以为卡死了
+    if (pairs === g.colors.length && filled < total) {
+      if (!g.warned) {
+        g.warned = true;
+        g.pulseUntil = performance.now() + 2600;
+        syncHud();
+        CG.ui.toast('线都连通了，还差 ' + (total - filled) + ' 格 —— 铺满整张网格才算过关');
+        CG.sfx.bad();
+      }
+    } else if (pairs < g.colors.length) {
+      g.warned = false;
+    }
+
+    if (pairs !== g.colors.length || filled !== total) return;
     g.solved = true;
     winLevel();
   }
@@ -389,6 +419,22 @@
       ctx.stroke();
     }
 
+    // 线全连通但还没铺满：把空格闪一下
+    if (performance.now() < (g.pulseUntil || 0)) {
+      const a = 0.32 + 0.34 * Math.sin(performance.now() / 130);
+      ctx.save();
+      ctx.strokeStyle = c.hint;
+      ctx.globalAlpha = Math.max(0.16, a);
+      ctx.lineWidth = Math.max(2, cell * 0.05);
+      for (let y = 0; y < g.rows; y++) {
+        for (let x = 0; x < g.cols; x++) {
+          if (g.owner[key(x, y)] >= 0) continue;
+          ctx.strokeRect(ox + x * cell + cell * 0.24, oy + y * cell + cell * 0.24, cell * 0.52, cell * 0.52);
+        }
+      }
+      ctx.restore();
+    }
+
     const cx = (p) => ox + p[0] * cell + cell / 2;
     const cy = (p) => oy + p[1] * cell + cell / 2;
 
@@ -484,6 +530,7 @@
   $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
 
   window.__game = g;
+  g.debugCheck = checkWin;   // 自动化测试用：直接触发一次胜负判定
 })();
 </script>
 </body>
