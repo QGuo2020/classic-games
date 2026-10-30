@@ -1,7 +1,7 @@
 # 经典小游戏合集 · Classic Arcade
 
 十个经典小游戏，全部**零依赖、零构建、纯前端**，双击 `index.html` 就能玩，
-也可以直接丢到 GitLab Pages / GitHub Pages / 任意静态服务器上。
+也可以直接丢到 GitHub Pages / 任意静态服务器上。
 
 风格沿用另一个项目 arrow-maze 的霓虹极简：深色底 + 青绿高光，可一键切换白天纸感主题。
 
@@ -59,39 +59,44 @@ classic-games/
 │   ├── mines/index.html
 │   ├── 2048/index.html
 │   └── match3/index.html
-├── tools/check.mjs          # 真浏览器自检：控制台报错 + 截图
-└── .gitlab-ci.yml
+├── tools/check.mjs          # 真浏览器自检：控制台报错 + 交互 + 通关 + 截图
+└── .gitattributes           # 统一 LF，避免 Windows 换行污染
 ```
 
 单个游戏是完全自包含的一个 HTML 文件，只有共享样式和 `core.js` 是外部依赖，
 复制走一个目录即可单独部署。
 
-## 部署到 GitLab Pages
+## 部署到 GitHub Pages
 
-1. 在 GitLab 新建空仓库（例如 `classic-games`）。
-2. 本地执行：
+仓库：<https://github.com/QGuo2020/classic-games>
 
-```bash
-git init -b main
-git add .
-git commit -m "feat: classic arcade"
-git remote add origin https://gitlab.com/<你的用户名>/classic-games.git
-git push -u origin main
-```
+推送后只要在仓库里打开一次 Pages 开关即可：
 
-3. 仓库已带 `.gitlab-ci.yml`，推送后 **Build → Pipelines** 会自动跑 `pages` 任务，
-   把 `index.html`、`assets/`、`games/` 拷进 `public/` 作为站点产物。
-4. 流水线绿了之后在 **Deploy → Pages** 拿到地址，形如：
+1. **Settings → Pages**
+2. Source 选 **Deploy from a branch**
+3. Branch 选 **main**，Folder 选 **/ (root)**
+4. 保存，等 1~2 分钟，访问：
 
 ```text
-https://<你的用户名>.gitlab.io/classic-games/
+https://qguo2020.github.io/classic-games/
 ```
+
+不需要任何构建或 CI：仓库根目录就是站点根目录，GitHub 会原样发布。
+之后每次 `git push` 都会在几十秒内自动更新。
 
 所有路径都是相对路径（`./assets/...`、`../../assets/...`），
 所以放在 `/classic-games/` 这种子路径下也能正常工作，不需要改配置。
 
-> GitLab 免费版 Pages 需要仓库为 public（或你有可用额度）；
-> 首次部署后如果看到旧页面，按 `Ctrl + F5` 强刷。
+> Pages 需要仓库为 public（免费账号）；如果打开后看到旧页面，按 `Ctrl + F5` 强刷。
+> 以后想改用 GitHub Actions 部署，再加一个 `upload-pages-artifact` 工作流即可，
+> 现在这套纯静态结构两种方式都兼容。
+
+### 本地预览
+
+```bash
+cd classic-games
+npx serve .                # 或 python -m http.server 8080
+```
 
 ## 技术要点
 
