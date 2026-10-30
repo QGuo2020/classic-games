@@ -1,0 +1,372 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>扫雷 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">扫雷<small>Minesweeper</small></div>
+  <div class="hud">
+    <span class="stat">关卡<b id="hudLevel">1</b></span>
+    <span class="stat">剩余雷<b id="hudMines">10</b></span>
+    <span class="stat">时间<b id="hudTime">0s</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnMode">🚩 标记模式 <kbd>F</kbd></button>
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <span class="spacer"></span>
+  <span class="note">左键翻开 · 右键 / 长按 / 标记模式插旗</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const $ = (id) => document.getElementById(id);
+  const hud = { level: $('hudLevel'), mines: $('hudMines'), time: $('hudTime') };
+
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  let W = 0, H = 0, ctx = null;
+  let busy = false;
+
+  const g = {
+    level: 1,
+    cols: 9, rows: 9, mineCount: 10,
+    cells: [],
+    placed: false,
+    revealed: 0,
+    flags: 0,
+    over: false,
+    won: false,
+    startTime: 0,
+    elapsed: 0,
+    flagMode: false,
+    boomIndex: -1,
+    pressTimer: null,
+    pressedIndex: -1,
+    longPressed: false
+  };
+
+  const prog = CG.progress('mines');
+  g.level = Math.max(1, prog.level);
+
+  const NUM_COLORS = ['#5df2d0', '#6ea8ff', '#7ee787', '#ffd166', '#ff9f6e', '#ff5d78', '#a78bfa', '#e8eefc'];
+
+  function neighbors(i) {
+    const x = i % g.cols, y = Math.floor(i / g.cols);
+    const out = [];
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dy) continue;
+        const nx = x + dx, ny = y + dy;
+        if (nx < 0 || ny < 0 || nx >= g.cols || ny >= g.rows) continue;
+        out.push(ny * g.cols + nx);
+      }
+    }
+    return out;
+  }
+
+  function buildLevel(n) {
+    const cols = 9 + Math.min(2, Math.floor((n - 1) / 3));
+    const rows = cols;
+    const total = cols * rows;
+    const mineCount = Math.min(Math.floor(total * 0.19), 10 + (n - 1) * 3);
+
+    g.level = n;
+    g.cols = cols; g.rows = rows;
+    g.mineCount = mineCount;
+    g.cells = [];
+    for (let i = 0; i < total; i++) {
+      g.cells.push({ mine: false, rev: false, flag: false, n: 0 });
+    }
+    g.placed = false;
+    g.revealed = 0;
+    g.flags = 0;
+    g.over = false;
+    g.won = false;
+    g.startTime = 0;
+    g.elapsed = 0;
+    g.boomIndex = -1;
+    syncHud();
+  }
+
+  function syncHud() {
+    hud.level.textContent = g.level;
+    hud.mines.textContent = Math.max(0, g.mineCount - g.flags);
+    hud.time.textContent = Math.floor(g.elapsed) + 's';
+  }
+
+  function placeMines(safe) {
+    const banned = new Set([safe, ...neighbors(safe)]);
+    const pool = [];
+    for (let i = 0; i < g.cells.length; i++) if (!banned.has(i)) pool.push(i);
+    const shuffled = CG.util.shuffle(pool);
+    for (let i = 0; i < g.mineCount && i < shuffled.length; i++) {
+      g.cells[shuffled[i]].mine = true;
+    }
+    for (let i = 0; i < g.cells.length; i++) {
+      if (g.cells[i].mine) continue;
+      g.cells[i].n = neighbors(i).filter((j) => g.cells[j].mine).length;
+    }
+    g.placed = true;
+    g.startTime = performance.now();
+  }
+
+  function reveal(i) {
+    if (g.over || !g.cells[i] || g.cells[i].rev || g.cells[i].flag) return;
+    if (!g.placed) placeMines(i);
+
+    const c = g.cells[i];
+    if (c.mine) { boom(i); return; }
+
+    const stack = [i];
+    while (stack.length) {
+      const j = stack.pop();
+      const cell = g.cells[j];
+      if (cell.rev || cell.flag) continue;
+      cell.rev = true;
+      g.revealed++;
+      if (cell.n === 0) {
+        for (const k of neighbors(j)) {
+          if (!g.cells[k].rev && !g.cells[k].flag) stack.push(k);
+        }
+      }
+    }
+    CG.sfx.step();
+    syncHud();
+    checkWin();
+  }
+
+  function toggleFlag(i) {
+    if (g.over || !g.cells[i] || g.cells[i].rev) return;
+    const c = g.cells[i];
+    c.flag = !c.flag;
+    g.flags += c.flag ? 1 : -1;
+    CG.sfx.click();
+    syncHud();
+  }
+
+  function boom(i) {
+    g.over = true;
+    g.boomIndex = i;
+    g.cells.forEach((c) => { if (c.mine) c.rev = true; });
+    CG.sfx.lose();
+    syncHud();
+    gameOver();
+  }
+
+  function checkWin() {
+    if (g.over) return;
+    if (g.revealed >= g.cells.length - g.mineCount) {
+      g.over = true;
+      g.won = true;
+      CG.sfx.win();
+      winLevel();
+    }
+  }
+
+  async function winLevel() {
+    if (busy) return;
+    busy = true;
+    const n = g.level;
+    const secs = Math.floor(g.elapsed);
+    prog.reach(n + 1);
+    prog.win(Math.max(0, 1000 - secs * 5));
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 关 · 扫清了',
+      text: '用时 <b>' + secs + 's</b>，' + g.mineCount + ' 颗雷一颗没踩。<br>下一关棋盘更大、雷更密。',
+      actions: [
+        { label: '下一关', value: 'next', primary: true },
+        { label: '重玩本关', value: 'again' }
+      ]
+    });
+    busy = false;
+    buildLevel(r === 'next' ? n + 1 : n);
+  }
+
+  async function gameOver() {
+    if (busy) return;
+    busy = true;
+    const r = await CG.ui.modal({
+      title: '踩到雷了',
+      text: '第 ' + g.level + ' 关，已翻开 ' + g.revealed + ' 格。',
+      actions: [
+        { label: '重试本关', value: 'retry', primary: true },
+        { label: '从第 1 关开始', value: 'reset' }
+      ]
+    });
+    busy = false;
+    if (r === 'reset') { prog.reset(); buildLevel(1); }
+    else buildLevel(g.level);
+  }
+
+  /* -------------------------------------------------- 绘制 */
+
+  function draw() {
+    const c = CG.colors();
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const grid = CG.util.grid(W, H, g.cols, g.rows, 14);
+    const { cell, ox, oy } = grid;
+    const gap = Math.max(1.5, cell * 0.07);
+
+    for (let i = 0; i < g.cells.length; i++) {
+      const x = i % g.cols, y = Math.floor(i / g.cols);
+      const px = ox + x * cell + gap / 2;
+      const py = oy + y * cell + gap / 2;
+      const s = cell - gap;
+      const cc = g.cells[i];
+
+      let fill, stroke = null;
+      if (!cc.rev) {
+        fill = c.light ? 'rgba(255,255,255,0.92)' : 'rgba(164,190,225,0.13)';
+        stroke = c.line;
+      } else if (cc.mine) {
+        fill = i === g.boomIndex ? 'rgba(255,93,120,0.85)' : 'rgba(255,93,120,0.35)';
+      } else {
+        fill = c.light ? 'rgba(45,72,100,0.06)' : 'rgba(255,255,255,0.03)';
+      }
+
+      ctx.fillStyle = fill;
+      const rr = Math.max(2, cell * 0.14);
+      ctx.beginPath();
+      ctx.moveTo(px + rr, py);
+      ctx.arcTo(px + s, py, px + s, py + s, rr);
+      ctx.arcTo(px + s, py + s, px, py + s, rr);
+      ctx.arcTo(px, py + s, px, py, rr);
+      ctx.arcTo(px, py, px + s, py, rr);
+      ctx.closePath();
+      ctx.fill();
+      if (stroke) { ctx.strokeStyle = stroke; ctx.lineWidth = 1; ctx.stroke(); }
+
+      const midX = px + s / 2, midY = py + s / 2;
+
+      if (cc.rev && cc.mine) {
+        ctx.fillStyle = c.bg;
+        ctx.beginPath();
+        ctx.arc(midX, midY, s * 0.22, 0, Math.PI * 2);
+        ctx.fill();
+      } else if (!cc.rev && cc.flag) {
+        ctx.fillStyle = c.hint;
+        ctx.beginPath();
+        ctx.arc(midX, midY, s * 0.16, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.strokeStyle = c.hint;
+        ctx.lineWidth = Math.max(1.5, cell * 0.06);
+        ctx.beginPath();
+        ctx.moveTo(midX, midY);
+        ctx.lineTo(midX, midY + s * 0.24);
+        ctx.stroke();
+      } else if (cc.rev && cc.n > 0) {
+        ctx.fillStyle = NUM_COLORS[(cc.n - 1) % NUM_COLORS.length];
+        ctx.font = '600 ' + Math.round(cell * 0.5) + 'px ' + getComputedStyle(document.body).fontFamily;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        ctx.fillText(String(cc.n), midX, midY + 1);
+      }
+    }
+  }
+
+  CG.loop(() => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildLevel(g.level);
+    }
+    if (g.placed && !g.over) {
+      g.elapsed = (performance.now() - g.startTime) / 1000;
+      hud.time.textContent = Math.floor(g.elapsed) + 's';
+    }
+    draw();
+  });
+
+  /* -------------------------------------------------- 输入 */
+
+  function cellIndexAt(e) {
+    const grid = CG.util.grid(W, H, g.cols, g.rows, 14);
+    const r = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - r.left - grid.ox) / grid.cell);
+    const y = Math.floor((e.clientY - r.top - grid.oy) / grid.cell);
+    if (x < 0 || y < 0 || x >= g.cols || y >= g.rows) return -1;
+    return y * g.cols + x;
+  }
+
+  canvas.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    const i = cellIndexAt(e);
+    if (i >= 0) toggleFlag(i);
+  });
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (busy) return;
+    if (e.button === 2) return;
+    const i = cellIndexAt(e);
+    if (i < 0) return;
+    g.pressedIndex = i;
+    g.longPressed = false;
+    clearTimeout(g.pressTimer);
+    g.pressTimer = setTimeout(() => {
+      g.longPressed = true;
+      toggleFlag(i);
+      if (navigator.vibrate) navigator.vibrate(15);
+    }, 420);
+  });
+
+  canvas.addEventListener('pointerup', (e) => {
+    clearTimeout(g.pressTimer);
+    if (busy || g.pressedIndex < 0) return;
+    const i = cellIndexAt(e);
+    if (i >= 0 && i === g.pressedIndex && !g.longPressed) {
+      if (g.flagMode) toggleFlag(i);
+      else reveal(i);
+    }
+    g.pressedIndex = -1;
+  });
+
+  canvas.addEventListener('pointercancel', () => {
+    clearTimeout(g.pressTimer);
+    g.pressedIndex = -1;
+  });
+
+  function setFlagMode(on) {
+    g.flagMode = on;
+    $('btnMode').innerHTML = (on ? '⛏ 挖掘模式' : '🚩 标记模式') + ' <kbd>F</kbd>';
+    $('btnMode').classList.toggle('primary', on);
+    CG.sfx.click();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'f' || e.key === 'F') setFlagMode(!g.flagMode);
+    if (e.key === 'r' || e.key === 'R') { if (!busy) buildLevel(g.level); }
+  });
+
+  $('btnMode').addEventListener('click', () => setFlagMode(!g.flagMode));
+  $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
+})();
+</script>
+</body>
+</html>

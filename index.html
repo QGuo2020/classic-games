@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#050912">
+<title>经典小游戏 · Classic Arcade</title>
+<meta name="description" content="十个经典小游戏，全部零依赖、纯前端、点开即玩，支持键盘与触屏。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M8 20l4-8 4 6 4-10 4 12' stroke='%235df2d0' stroke-width='2.5' fill='none' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="./assets/css/theme.css">
+</head>
+<body>
+<div class="shell">
+
+  <header class="hero">
+    <div>
+      <div class="brand-mark">Classic Arcade</div>
+      <h1>十个<em>经典小游戏</em>，<br>点开就能玩。</h1>
+      <p>纯原生 JavaScript + Canvas，零依赖、零构建、无需联网。每个游戏都是闯关制：清掉一关，下一关更难一点。</p>
+    </div>
+    <div class="hero-side">
+      <button class="icon-btn" id="btnSound" title="音效开关" aria-label="音效开关">🔊</button>
+      <button class="icon-btn" id="btnTheme" title="切换主题" aria-label="切换主题">☾</button>
+    </div>
+  </header>
+
+  <nav class="filters" id="filters" aria-label="分类筛选">
+    <button class="chip" data-cat="all" aria-pressed="true">全部 <span id="countAll">10</span></button>
+    <button class="chip" data-cat="arcade" aria-pressed="false">街机动作</button>
+    <button class="chip" data-cat="puzzle" aria-pressed="false">益智解谜</button>
+    <button class="chip" data-cat="casual" aria-pressed="false">休闲消除</button>
+  </nav>
+
+  <main class="grid" id="grid">
+
+    <a class="card" href="./games/breakout/index.html" data-cat="arcade" data-slug="breakout">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <rect x="3" y="4" width="5" height="2.4" rx=".6"/><rect x="10" y="4" width="5" height="2.4" rx=".6"/><rect x="17" y="4" width="4" height="2.4" rx=".6"/>
+            <rect x="3" y="8.4" width="5" height="2.4" rx=".6"/><rect x="10" y="8.4" width="5" height="2.4" rx=".6"/><rect x="17" y="8.4" width="4" height="2.4" rx=".6"/>
+            <circle cx="12" cy="15" r="1.6"/><path d="M6 20.5h12" stroke-linecap="round"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">打砖块</div>
+          <div class="card-en">Breakout</div>
+        </div>
+      </div>
+      <p class="card-desc">左右移动挡板弹球，敲掉整屏砖块。砖块有硬度，击球角度决定反弹方向。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="breakout">无限关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/invaders/index.html" data-cat="arcade" data-slug="invaders">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="currentColor">
+            <rect x="7" y="5" width="2" height="2"/><rect x="15" y="5" width="2" height="2"/>
+            <rect x="5" y="7" width="14" height="2"/><rect x="9" y="9" width="2" height="2"/><rect x="13" y="9" width="2" height="2"/>
+            <rect x="5" y="11" width="2" height="2"/><rect x="9" y="11" width="2" height="2"/><rect x="13" y="11" width="2" height="2"/><rect x="17" y="11" width="2" height="2"/>
+            <rect x="7" y="13" width="2" height="2"/><rect x="15" y="13" width="2" height="2"/>
+            <rect x="9" y="15" width="2" height="2"/><rect x="13" y="15" width="2" height="2"/>
+            <rect x="11" y="19" width="2" height="2"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">太空侵略者</div>
+          <div class="card-en">Invaders</div>
+        </div>
+      </div>
+      <p class="card-desc">外星舰队整体推进，越打越快。守住防线，清空一波进下一波。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="invaders">波次关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/snake/index.html" data-cat="arcade" data-slug="snake">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 18h5V9h5V5h4"/>
+            <circle cx="5" cy="18" r="1.8" fill="currentColor" stroke="none"/>
+            <circle cx="19" cy="5" r="1.4" fill="currentColor" stroke="none"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">贪吃蛇 · 迷宫</div>
+          <div class="card-en">Snake Maze</div>
+        </div>
+      </div>
+      <p class="card-desc">每关一张新迷宫，吃满目标长度才算过关。别咬到自己，也别撞墙。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="snake">无限关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/sokoban/index.html" data-cat="puzzle" data-slug="sokoban">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <rect x="4" y="4" width="16" height="16" rx="2"/>
+            <path d="M4 12h16M12 4v16"/>
+            <rect x="10" y="10" width="4" height="4" rx="1" fill="currentColor" stroke="none"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">推箱子</div>
+          <div class="card-en">Sokoban</div>
+        </div>
+      </div>
+      <p class="card-desc">把所有箱子推到目标点。只能推不能拉，推错一步就得重来。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="sokoban">无限关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/flow/index.html" data-cat="puzzle" data-slug="flow">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M6 17c0-4 3-4 3-8h6c0 4 3 4 3 8"/>
+            <circle cx="6" cy="17" r="2" fill="currentColor" stroke="none"/>
+            <circle cx="18" cy="17" r="2" fill="currentColor" stroke="none"/>
+            <circle cx="12" cy="6" r="1.4" fill="currentColor" stroke="none"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">一笔画 · 连线</div>
+          <div class="card-en">Flow Free</div>
+        </div>
+      </div>
+      <p class="card-desc">拖动连接相同颜色的两个端点，铺满整个网格且线不交叉。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="flow">无限关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/ice/index.html" data-cat="puzzle" data-slug="ice">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round">
+            <path d="M12 3l7 6-7 12L5 9z"/>
+            <path d="M12 3v18M5 9h14"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">冰面滑行</div>
+          <div class="card-en">Ice Slide</div>
+        </div>
+      </div>
+      <p class="card-desc">一滑动就停不下来，撞到石头才停。收集全部宝石离开。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="ice">无限关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/lasers/index.html" data-cat="puzzle" data-slug="lasers">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <path d="M3 20L11 12l4 4 6-9"/>
+            <circle cx="11" cy="12" r="1.6" fill="currentColor" stroke="none"/>
+            <path d="M18 4l3 3-3 3"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">激光反射</div>
+          <div class="card-en">Laser Mirror</div>
+        </div>
+      </div>
+      <p class="card-desc">旋转镜子把光束引到所有目标。斜镜反射一次，直镜偏转两次。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="lasers">无限关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/mines/index.html" data-cat="casual" data-slug="mines">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+            <circle cx="12" cy="13" r="5"/>
+            <path d="M12 4v2M5 6l1.6 1.6M19 6l-1.6 1.6M4 13H2M22 13h-2"/>
+            <circle cx="10.4" cy="11.4" r=".9" fill="currentColor" stroke="none"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">扫雷</div>
+          <div class="card-en">Minesweeper</div>
+        </div>
+      </div>
+      <p class="card-desc">数字是周围雷数，右键插旗。首点安全，扫清所有非雷格过关。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="mines">无限关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/2048/index.html" data-cat="casual" data-slug="2048">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <rect x="3.5" y="3.5" width="8" height="8" rx="2"/>
+            <rect x="12.5" y="3.5" width="8" height="8" rx="2" fill="currentColor" fill-opacity=".18"/>
+            <rect x="3.5" y="12.5" width="8" height="8" rx="2" fill="currentColor" fill-opacity=".18"/>
+            <rect x="12.5" y="12.5" width="8" height="8" rx="2"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">2048</div>
+          <div class="card-en">2048</div>
+        </div>
+      </div>
+      <p class="card-desc">滑动合并同数字，在步数用光前合出目标方块，然后进下一关。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="2048">无限关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/match3/index.html" data-cat="casual" data-slug="match3">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7">
+            <path d="M7 7l10 10M17 7L7 17" stroke-linecap="round" opacity=".35"/>
+            <circle cx="6" cy="6" r="2.4" fill="currentColor"/>
+            <circle cx="18" cy="6" r="2.4" fill="currentColor" fill-opacity=".5"/>
+            <circle cx="6" cy="18" r="2.4" fill="currentColor" fill-opacity=".5"/>
+            <circle cx="18" cy="18" r="2.4" fill="currentColor"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">三消</div>
+          <div class="card-en">Match 3</div>
+        </div>
+      </div>
+      <p class="card-desc">交换相邻方块凑成三连，连锁消除得分。在步数用尽前达到目标分。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="match3">无限关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+  </main>
+
+  <footer class="foot">
+    <div>零依赖 · 纯前端 · 支持 <kbd>←</kbd> <kbd>→</kbd> <kbd>↑</kbd> <kbd>↓</kbd> / 方向键、<kbd>空格</kbd>、鼠标与触屏</div>
+    <div>部署：GitLab Pages · 每个游戏都是独立的静态页面</div>
+  </footer>
+
+</div>
+
+<script src="./assets/js/core.js"></script>
+<script>
+(function () {
+  CG.theme.bind(document.getElementById('btnTheme'));
+  CG.soundButton(document.getElementById('btnSound'));
+
+  // 分类筛选
+  const chips = Array.from(document.querySelectorAll('.chip'));
+  const cards = Array.from(document.querySelectorAll('.card'));
+
+  chips.forEach((chip) => {
+    chip.addEventListener('click', () => {
+      CG.sfx.click();
+      chips.forEach((c) => c.setAttribute('aria-pressed', String(c === chip)));
+      const cat = chip.dataset.cat;
+      cards.forEach((card) => {
+        const show = cat === 'all' || card.dataset.cat === cat;
+        card.style.display = show ? '' : 'none';
+      });
+    });
+  });
+
+  // 显示本地进度
+  cards.forEach((card) => {
+    const slug = card.dataset.slug;
+    const tag = card.querySelector('[data-progress]');
+    const p = CG.progress(slug);
+    if (!tag || !p.data || p.data.max <= 1) return;
+    tag.textContent = '最高 第 ' + p.data.max + ' 关';
+    tag.style.color = 'var(--accent)';
+    tag.style.borderColor = 'var(--accent)';
+  });
+})();
+</script>
+</body>
+</html>

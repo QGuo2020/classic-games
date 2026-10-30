@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>太空侵略者 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">太空侵略者<small>Invaders</small></div>
+  <div class="hud">
+    <span class="stat">波次<b id="hudLevel">1</b></span>
+    <span class="stat">分数<b id="hudScore">0</b></span>
+    <span class="stat">生命<b id="hudLives" class="accent">3</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <button class="btn" id="btnPause">暂停 <kbd>P</kbd></button>
+  <span class="spacer"></span>
+  <span class="note"><kbd>←</kbd> <kbd>→</kbd> 移动 · <kbd>空格</kbd> 射击</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const $ = (id) => document.getElementById(id);
+  const hud = { level: $('hudLevel'), score: $('hudScore'), lives: $('hudLives') };
+
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  const SPRITE = [
+    '0111110',
+    '1111111',
+    '1101011',
+    '1111111',
+    '0111110',
+    '0101010',
+    '1000001'
+  ];
+
+  let W = 0, H = 0, ctx = null;
+  let paused = false, busy = false;
+
+  const g = {
+    level: 1, score: 0, lives: 3,
+    player: { x: 0, y: 0, w: 34, h: 18, cooldown: 0 },
+    aliens: [], dir: 1, stepTimer: 0,
+    bullets: [], bombs: [],
+    bombTimer: 0,
+    keys: { left: false, right: false },
+    moveTarget: null,
+    flash: 0
+  };
+
+  const prog = CG.progress('invaders');
+  g.level = Math.max(1, prog.level);
+
+  function syncHud() {
+    hud.level.textContent = g.level;
+    hud.score.textContent = g.score;
+    hud.lives.textContent = g.lives;
+    hud.lives.className = g.lives <= 1 ? 'danger' : 'accent';
+  }
+
+  function buildWave(n) {
+    const cols = Math.min(9, 5 + Math.floor(n / 2));
+    const rows = Math.min(5, 3 + Math.floor(n / 3));
+    const cell = Math.min(64, (Math.min(W, 900) - 80) / cols);
+    const size = cell * 0.74;
+    const ox = (W - cols * cell) / 2 + (cell - size) / 2;
+    const oy = 84;
+
+    g.aliens = [];
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        g.aliens.push({
+          x: ox + c * cell,
+          y: oy + r * cell,
+          w: size, h: size,
+          alive: true,
+          row: r
+        });
+      }
+    }
+    g.dir = 1;
+    g.stepTimer = 0;
+    g.bullets = [];
+    g.bombs = [];
+    g.bombTimer = 0.6;
+    g.player.w = 34;
+    g.player.h = 18;
+    g.player.y = H - 52;
+    g.player.x = W / 2 - g.player.w / 2;
+    g.level = n;
+    syncHud();
+  }
+
+  function interval() {
+    const alive = g.aliens.filter((a) => a.alive).length;
+    const total = Math.max(1, g.aliens.length);
+    return Math.max(90, 620 - g.level * 45 - (1 - alive / total) * 320);
+  }
+
+  function stepAliens() {
+    const alive = g.aliens.filter((a) => a.alive);
+    if (!alive.length) return;
+
+    let minX = Infinity, maxX = -Infinity;
+    alive.forEach((a) => { minX = Math.min(minX, a.x); maxX = Math.max(maxX, a.x + a.w); });
+
+    const dx = Math.max(6, 12 + g.level);
+    if (maxX + dx > W - 12 || minX - dx < 12) {
+      g.dir *= -1;
+      alive.forEach((a) => { a.y += 14; });
+    } else {
+      alive.forEach((a) => { a.x += dx * g.dir; });
+    }
+
+    const bottom = Math.max.apply(null, alive.map((a) => a.y + a.h));
+    if (bottom > g.player.y - 8) gameOver('外星人突破防线');
+  }
+
+  function shoot() {
+    if (paused || busy) return;
+    if (g.player.cooldown > 0) return;
+    g.player.cooldown = 0.22;
+    g.bullets.push({ x: g.player.x + g.player.w / 2, y: g.player.y, vy: -620 });
+    CG.audio.tone(880, 0.05, { type: 'square', vol: 0.025 });
+  }
+
+  function hitPlayer() {
+    g.lives -= 1;
+    syncHud();
+    g.bombs = [];
+    g.flash = 0.35;
+    CG.sfx.bad();
+    if (g.lives <= 0) gameOver('战舰被击毁');
+    else {
+      g.player.x = W / 2 - g.player.w / 2;
+      g.bullets = [];
+    }
+  }
+
+  async function waveClear() {
+    if (busy) return;
+    busy = true;
+    CG.sfx.win();
+    const n = g.level;
+    prog.reach(n + 1);
+    prog.win(g.score);
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 波清空',
+      text: '得分 <b>' + g.score + '</b><br>下一波外星舰队规模更大。',
+      actions: [
+        { label: '下一波', value: 'next', primary: true },
+        { label: '留在这里', value: 'stay' }
+      ]
+    });
+    busy = false;
+    if (r === 'next') {
+      g.score += 100;
+      buildWave(n + 1);
+    }
+  }
+
+  async function gameOver(reason) {
+    if (busy) return;
+    busy = true;
+    CG.sfx.lose();
+    const r = await CG.ui.modal({
+      title: '防线失守',
+      text: (reason || '') + '<br>本局得分 <b>' + g.score + '</b>',
+      actions: [
+        { label: '重打这一波', value: 'retry', primary: true },
+        { label: '从第 1 波开始', value: 'reset' }
+      ]
+    });
+    busy = false;
+    if (r === 'reset') {
+      g.score = 0;
+      g.lives = 3;
+      prog.reset();
+      buildWave(1);
+    } else {
+      g.lives = 3;
+      buildWave(g.level);
+    }
+    syncHud();
+  }
+
+  /* -------------------------------------------------------- 更新 */
+
+  function update(dt) {
+    if (paused || busy) return;
+
+    g.flash = Math.max(0, g.flash - dt);
+    g.player.cooldown = Math.max(0, g.player.cooldown - dt);
+
+    const sp = 460;
+    if (g.keys.left) { g.player.x -= sp * dt; g.moveTarget = null; }
+    if (g.keys.right) { g.player.x += sp * dt; g.moveTarget = null; }
+    if (g.moveTarget != null) {
+      const goal = g.moveTarget - g.player.w / 2;
+      g.player.x += (goal - g.player.x) * Math.min(1, dt * 16);
+    }
+    g.player.x = CG.util.clamp(g.player.x, 10, W - g.player.w - 10);
+
+    g.stepTimer += dt * 1000;
+    if (g.stepTimer >= interval()) {
+      g.stepTimer = 0;
+      stepAliens();
+    }
+
+    for (let i = g.bullets.length - 1; i >= 0; i--) {
+      const b = g.bullets[i];
+      b.y += b.vy * dt;
+      if (b.y < -10) { g.bullets.splice(i, 1); continue; }
+      let hit = false;
+      for (const a of g.aliens) {
+        if (!a.alive) continue;
+        if (b.x > a.x && b.x < a.x + a.w && b.y > a.y && b.y < a.y + a.h) {
+          a.alive = false;
+          hit = true;
+          g.score += 10 + (3 - a.row) * 5;
+          syncHud();
+          CG.sfx.step();
+          break;
+        }
+      }
+      if (hit) {
+        g.bullets.splice(i, 1);
+        if (!g.aliens.some((a) => a.alive)) waveClear();
+      }
+    }
+
+    g.bombTimer -= dt;
+    if (g.bombTimer <= 0 && g.aliens.some((a) => a.alive)) {
+      g.bombTimer = Math.max(0.35, 1.5 - g.level * 0.08) + Math.random() * 0.5;
+      const shooters = g.aliens.filter((a) => a.alive);
+      const a = shooters[Math.floor(Math.random() * shooters.length)];
+      g.bombs.push({ x: a.x + a.w / 2, y: a.y + a.h, vy: 210 + g.level * 12 });
+    }
+
+    for (let i = g.bombs.length - 1; i >= 0; i--) {
+      const b = g.bombs[i];
+      b.y += b.vy * dt;
+      if (b.y > H + 10) { g.bombs.splice(i, 1); continue; }
+      const p = g.player;
+      if (b.x > p.x - 4 && b.x < p.x + p.w + 4 && b.y > p.y - 4 && b.y < p.y + p.h) {
+        g.bombs.splice(i, 1);
+        hitPlayer();
+      }
+    }
+  }
+
+  /* -------------------------------------------------------- 绘制 */
+
+  function drawAlien(a, c) {
+    const cell = a.w / 7;
+    ctx.fillStyle = c.accent;
+    ctx.shadowColor = c.accent;
+    ctx.shadowBlur = c.light ? 0 : 10;
+    for (let r = 0; r < 7; r++) {
+      const row = SPRITE[r];
+      for (let i = 0; i < 7; i++) {
+        if (row[i] === '1') ctx.fillRect(a.x + i * cell, a.y + r * cell, cell + 0.5, cell + 0.5);
+      }
+    }
+    ctx.shadowBlur = 0;
+  }
+
+  function draw() {
+    const c = CG.colors();
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    if (g.flash > 0) {
+      ctx.fillStyle = 'rgba(255,93,120,' + (g.flash * 0.35) + ')';
+      ctx.fillRect(0, 0, W, H);
+    }
+
+    ctx.strokeStyle = c.lineStrong;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(0, H - 16);
+    ctx.lineTo(W, H - 16);
+    ctx.stroke();
+
+    g.aliens.forEach((a) => { if (a.alive) drawAlien(a, c); });
+
+    const p = g.player;
+    ctx.fillStyle = c.accent;
+    ctx.shadowColor = c.accent;
+    ctx.shadowBlur = c.light ? 0 : 16;
+    ctx.beginPath();
+    ctx.moveTo(p.x + p.w / 2, p.y);
+    ctx.lineTo(p.x + p.w, p.y + p.h);
+    ctx.lineTo(p.x, p.y + p.h);
+    ctx.closePath();
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    ctx.fillStyle = c.text;
+    g.bullets.forEach((b) => { ctx.fillRect(b.x - 1.5, b.y - 10, 3, 10); });
+
+    g.bombs.forEach((b) => {
+      ctx.fillStyle = c.danger;
+      ctx.fillRect(b.x - 2, b.y - 8, 4, 8);
+    });
+  }
+
+  /* -------------------------------------------------------- 循环 */
+
+  CG.loop((dt) => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildWave(g.level);
+      else g.player.y = H - 52;
+    }
+    update(dt);
+    draw();
+  });
+
+  /* -------------------------------------------------------- 输入 */
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'a') g.keys.left = true;
+    if (e.key === 'ArrowRight' || e.key === 'd') g.keys.right = true;
+    if (e.code === 'Space') { e.preventDefault(); shoot(); }
+    if (e.key === 'r' || e.key === 'R') { if (!busy) { g.lives = 3; buildWave(g.level); } }
+    if (e.key === 'p' || e.key === 'P') togglePause();
+  });
+  document.addEventListener('keyup', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'a') g.keys.left = false;
+    if (e.key === 'ArrowRight' || e.key === 'd') g.keys.right = false;
+  });
+
+  canvas.addEventListener('pointerdown', (e) => {
+    const r = canvas.getBoundingClientRect();
+    g.moveTarget = e.clientX - r.left;
+    shoot();
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (e.buttons) return;
+    const r = canvas.getBoundingClientRect();
+    g.moveTarget = e.clientX - r.left;
+  });
+
+  async function togglePause() {
+    if (busy || paused) return;
+    paused = true;
+    await CG.ui.modal({ title: '已暂停', text: '按 P 或点击继续。', actions: [{ label: '继续', value: 'ok', primary: true }] });
+    paused = false;
+  }
+
+  $('btnRestart').addEventListener('click', () => {
+    if (busy) return;
+    g.lives = 3;
+    buildWave(g.level);
+  });
+  $('btnPause').addEventListener('click', togglePause);
+})();
+</script>
+</body>
+</html>

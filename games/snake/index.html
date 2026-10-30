@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>贪吃蛇 · 迷宫 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">贪吃蛇 · 迷宫<small>Snake Maze</small></div>
+  <div class="hud">
+    <span class="stat">关卡<b id="hudLevel">1</b></span>
+    <span class="stat">长度<b id="hudLen">3</b></span>
+    <span class="stat">目标<b id="hudGoal">10</b></span>
+    <span class="stat">生命<b id="hudLives" class="accent">3</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <button class="btn" id="btnPause">暂停 <kbd>P</kbd></button>
+  <span class="spacer"></span>
+  <span class="note">方向键 / <kbd>WASD</kbd> / 滑动屏幕</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const $ = (id) => document.getElementById(id);
+  const hud = { level: $('hudLevel'), len: $('hudLen'), goal: $('hudGoal'), lives: $('hudLives') };
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  const COLS = 18, ROWS = 18;
+
+  let W = 0, H = 0, ctx = null;
+  let paused = false, busy = false;
+
+  const g = {
+    level: 1, score: 0, lives: 3,
+    snake: [], dir: { x: 1, y: 0 }, nextDir: { x: 1, y: 0 },
+    walls: new Set(),
+    food: null,
+    acc: 0, stepMs: 150,
+    target: 10,
+    flash: 0,
+    started: false
+  };
+
+  const prog = CG.progress('snake');
+  g.level = Math.max(1, prog.level);
+
+  const key = (x, y) => x + ',' + y;
+
+  function syncHud() {
+    hud.level.textContent = g.level;
+    hud.len.textContent = g.snake.length;
+    hud.goal.textContent = g.target;
+    hud.lives.textContent = g.lives;
+    hud.lives.className = g.lives <= 1 ? 'danger' : 'accent';
+  }
+
+  function buildLevel(n) {
+    const rnd = CG.util.rng(n * 104729 + 7);
+    g.walls = new Set();
+    const cx = Math.floor(COLS / 2), cy = Math.floor(ROWS / 2);
+
+    // 出生走廊留空，避免一开局就被堵死
+    const inStart = (px, py) => py === cy && px >= cx - 4 && px <= cx + 2;
+
+    const blocks = Math.min(46, 6 + n * 3);
+    for (let i = 0; i < blocks; i++) {
+      const x = Math.floor(rnd() * (COLS / 2));
+      const y = Math.floor(rnd() * ROWS);
+      const mx = COLS - 1 - x;
+      if (inStart(x, y) || inStart(mx, y)) continue;
+      g.walls.add(key(x, y));
+      g.walls.add(key(mx, y));
+    }
+
+    if (n >= 3) {
+      const y1 = 3 + Math.floor(rnd() * (ROWS - 6));
+      const y2 = 3 + Math.floor(rnd() * (ROWS - 6));
+      if (y1 !== cy && y2 !== cy) {
+        for (let x = 2; x < COLS - 2; x++) {
+          if (rnd() < 0.55) { g.walls.add(key(x, y1)); g.walls.add(key(COLS - 1 - x, y2)); }
+        }
+      }
+    }
+
+    g.snake = [
+      { x: cx, y: cy },
+      { x: cx - 1, y: cy },
+      { x: cx - 2, y: cy }
+    ];
+    g.dir = { x: 1, y: 0 };
+    g.nextDir = { x: 1, y: 0 };
+    g.target = 8 + n * 2;
+    g.stepMs = Math.max(70, 160 - n * 6);
+    g.acc = 0;
+    g.level = n;
+    g.started = false;
+    spawnFood();
+    syncHud();
+  }
+
+  function reachable() {
+    const start = g.snake[0];
+    const seen = new Set([key(start.x, start.y)]);
+    const q = [start];
+    while (q.length) {
+      const c = q.shift();
+      for (const d of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = c.x + d[0], ny = c.y + d[1];
+        const k = key(nx, ny);
+        if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS) continue;
+        if (g.walls.has(k) || seen.has(k)) continue;
+        seen.add(k);
+        q.push({ x: nx, y: ny });
+      }
+    }
+    return seen;
+  }
+
+  function spawnFood() {
+    const free = [];
+    const reach = reachable();
+    for (let y = 0; y < ROWS; y++) {
+      for (let x = 0; x < COLS; x++) {
+        const k = key(x, y);
+        if (g.walls.has(k) || !reach.has(k)) continue;
+        if (g.snake.some((s) => s.x === x && s.y === y)) continue;
+        free.push({ x, y });
+      }
+    }
+    g.food = free.length ? free[Math.floor(Math.random() * free.length)] : null;
+  }
+
+  function turn(x, y) {
+    if (g.dir.x === -x && g.dir.y === -y) return;
+    g.nextDir = { x, y };
+    g.started = true;
+  }
+
+  function step() {
+    g.dir = g.nextDir;
+    const head = g.snake[0];
+    const nx = head.x + g.dir.x;
+    const ny = head.y + g.dir.y;
+
+    if (nx < 0 || ny < 0 || nx >= COLS || ny >= ROWS || g.walls.has(key(nx, ny)) ||
+        g.snake.some((s, i) => i < g.snake.length - 1 && s.x === nx && s.y === ny)) {
+      die();
+      return;
+    }
+
+    g.snake.unshift({ x: nx, y: ny });
+
+    if (g.food && nx === g.food.x && ny === g.food.y) {
+      g.score += 10 * g.level;
+      CG.sfx.ok();
+      if (g.snake.length >= g.target) {
+        winLevel();
+        return;
+      }
+      spawnFood();
+    } else {
+      g.snake.pop();
+    }
+    syncHud();
+  }
+
+  function die() {
+    g.lives -= 1;
+    g.flash = 0.5;
+    CG.sfx.bad();
+    syncHud();
+    if (g.lives <= 0) {
+      gameOver();
+    } else {
+      const cx = Math.floor(COLS / 2), cy = Math.floor(ROWS / 2);
+      g.snake = [{ x: cx, y: cy }, { x: cx - 1, y: cy }, { x: cx - 2, y: cy }];
+      g.dir = { x: 1, y: 0 };
+      g.nextDir = { x: 1, y: 0 };
+      g.acc = 0;
+      g.started = false;
+      spawnFood();
+      syncHud();
+    }
+  }
+
+  async function winLevel() {
+    if (busy) return;
+    busy = true;
+    CG.sfx.win();
+    const n = g.level;
+    prog.reach(n + 1);
+    prog.win(g.score);
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 关通过',
+      text: '长度达到 <b>' + g.target + '</b>，总分 <b>' + g.score + '</b><br>下一关障碍更多、速度更快。',
+      actions: [
+        { label: '下一关', value: 'next', primary: true },
+        { label: '留在这里', value: 'stay' }
+      ]
+    });
+    busy = false;
+    if (r === 'next') {
+      g.lives = 3;
+      buildLevel(n + 1);
+    }
+  }
+
+  async function gameOver() {
+    if (busy) return;
+    busy = true;
+    CG.sfx.lose();
+    const r = await CG.ui.modal({
+      title: '游戏结束',
+      text: '本局得分 <b>' + g.score + '</b>',
+      actions: [
+        { label: '重试本关', value: 'retry', primary: true },
+        { label: '从第 1 关开始', value: 'reset' }
+      ]
+    });
+    busy = false;
+    if (r === 'reset') {
+      g.score = 0;
+      g.lives = 3;
+      prog.reset();
+      buildLevel(1);
+    } else {
+      g.lives = 3;
+      buildLevel(g.level);
+    }
+  }
+
+  /* -------------------------------------------------------- 绘制 */
+
+  function cellRect() {
+    return CG.util.grid(W, H, COLS, ROWS, 14);
+  }
+
+  function draw() {
+    const c = CG.colors();
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const { cell, ox, oy } = cellRect();
+    const pad = Math.max(1, cell * 0.06);
+
+    ctx.strokeStyle = c.line;
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= COLS; x++) {
+      ctx.beginPath();
+      ctx.moveTo(ox + x * cell, oy);
+      ctx.lineTo(ox + x * cell, oy + ROWS * cell);
+      ctx.stroke();
+    }
+    for (let y = 0; y <= ROWS; y++) {
+      ctx.beginPath();
+      ctx.moveTo(ox, oy + y * cell);
+      ctx.lineTo(ox + COLS * cell, oy + y * cell);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = c.lineStrong;
+    g.walls.forEach((k) => {
+      const [x, y] = k.split(',').map(Number);
+      ctx.fillRect(ox + x * cell + pad, oy + y * cell + pad, cell - pad * 2, cell - pad * 2);
+    });
+
+    if (g.food) {
+      const t = performance.now() / 320;
+      const r = cell * (0.26 + 0.04 * Math.sin(t));
+      ctx.fillStyle = c.danger;
+      ctx.shadowColor = c.danger;
+      ctx.shadowBlur = c.light ? 0 : 16;
+      ctx.beginPath();
+      ctx.arc(ox + g.food.x * cell + cell / 2, oy + g.food.y * cell + cell / 2, r, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    }
+
+    const n = g.snake.length;
+    g.snake.forEach((s, i) => {
+      const t = i / Math.max(1, n - 1);
+      ctx.fillStyle = i === 0 ? c.text : c.accent;
+      ctx.globalAlpha = i === 0 ? 1 : 0.95 - t * 0.5;
+      ctx.shadowColor = c.accent;
+      ctx.shadowBlur = c.light ? 0 : i === 0 ? 16 : 8;
+      const inset = pad + (i === 0 ? 0 : cell * 0.05);
+      const rr = cell * 0.28;
+      const x = ox + s.x * cell + inset;
+      const y = oy + s.y * cell + inset;
+      const w = cell - inset * 2;
+      ctx.beginPath();
+      ctx.moveTo(x + rr, y);
+      ctx.arcTo(x + w, y, x + w, y + w, rr);
+      ctx.arcTo(x + w, y + w, x, y + w, rr);
+      ctx.arcTo(x, y + w, x, y, rr);
+      ctx.arcTo(x, y, x + w, y, rr);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    });
+
+    if (g.flash > 0) {
+      ctx.fillStyle = 'rgba(255,93,120,' + (g.flash * 0.35) + ')';
+      ctx.fillRect(ox, oy, COLS * cell, ROWS * cell);
+    }
+
+    if (!g.started && !busy) {
+      ctx.fillStyle = c.muted;
+      ctx.font = '13px ' + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = 'center';
+      ctx.fillText('按方向键开始', ox + COLS * cell / 2, oy + ROWS * cell / 2 + cell * 3.4);
+    }
+  }
+
+  /* -------------------------------------------------------- 循环 */
+
+  CG.loop((dt) => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildLevel(g.level);
+    }
+
+    if (!paused && !busy) {
+      g.flash = Math.max(0, g.flash - dt);
+      if (g.started) {
+        g.acc += dt * 1000;
+        while (g.acc >= g.stepMs) {
+          g.acc -= g.stepMs;
+          step();
+          if (busy || !g.started) break;
+        }
+      }
+    }
+    draw();
+  });
+
+  /* -------------------------------------------------------- 输入 */
+
+  document.addEventListener('keydown', (e) => {
+    switch (e.key) {
+      case 'ArrowLeft': case 'a': case 'A': turn(-1, 0); break;
+      case 'ArrowRight': case 'd': case 'D': turn(1, 0); break;
+      case 'ArrowUp': case 'w': case 'W': turn(0, -1); break;
+      case 'ArrowDown': case 's': case 'S': turn(0, 1); break;
+      case 'r': case 'R': if (!busy) { g.lives = 3; buildLevel(g.level); } break;
+      case 'p': case 'P': togglePause(); break;
+    }
+    if (['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) e.preventDefault();
+  });
+
+  CG.util.swiper(canvas, (dir) => {
+    if (dir === 'left') turn(-1, 0);
+    if (dir === 'right') turn(1, 0);
+    if (dir === 'up') turn(0, -1);
+    if (dir === 'down') turn(0, 1);
+  });
+
+  async function togglePause() {
+    if (busy || paused) return;
+    paused = true;
+    await CG.ui.modal({ title: '已暂停', text: '按 P 或点击继续。', actions: [{ label: '继续', value: 'ok', primary: true }] });
+    paused = false;
+  }
+
+  $('btnRestart').addEventListener('click', () => { if (!busy) { g.lives = 3; buildLevel(g.level); } });
+  $('btnPause').addEventListener('click', togglePause);
+})();
+</script>
+</body>
+</html>

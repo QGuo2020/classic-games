@@ -1,0 +1,362 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>激光反射 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">激光反射<small>Laser Mirror</small></div>
+  <div class="hud">
+    <span class="stat">关卡<b id="hudLevel">1</b></span>
+    <span class="stat">目标<b id="hudHits">0/2</b></span>
+    <span class="stat">镜子<b id="hudMirrors">0</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <span class="spacer"></span>
+  <span class="note">点击镜子旋转 90°，让光束点亮所有目标</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const $ = (id) => document.getElementById(id);
+  const hud = { level: $('hudLevel'), hits: $('hudHits'), mirrors: $('hudMirrors') };
+
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  let W = 0, H = 0, ctx = null;
+  let busy = false;
+
+  const g = {
+    level: 1,
+    cols: 7, rows: 7,
+    mirrors: new Map(),     // "x,y" -> "/" 或 "\"
+    targets: new Set(),
+    source: { x: 0, y: 3, dir: [1, 0] },
+    solved: false
+  };
+
+  const prog = CG.progress('lasers');
+  g.level = Math.max(1, prog.level);
+
+  const key = (x, y) => x + ',' + y;
+  const unkey = (k) => k.split(',').map(Number);
+  const inside = (x, y) => x >= 0 && y >= 0 && x < g.cols && y < g.rows;
+
+  function turn(ch, dir) {
+    const dx = dir[0], dy = dir[1];
+    if (ch === '/') return [-dy, -dx];
+    return [dy, dx];
+  }
+
+  function trace(map) {
+    const mirrors = map || g.mirrors;
+    let x = g.source.x, y = g.source.y;
+    let dx = g.source.dir[0], dy = g.source.dir[1];
+    const segs = [{ x, y }];
+    const hits = new Set();
+    let guard = 0;
+
+    while (guard++ < 600) {
+      const nx = x + dx, ny = y + dy;
+      if (!inside(nx, ny)) break;
+      x = nx; y = ny;
+      segs.push({ x, y });
+      if (g.targets.has(key(x, y))) hits.add(key(x, y));
+      const m = mirrors.get(key(x, y));
+      if (m) {
+        const d2 = turn(m, [dx, dy]);
+        dx = d2[0]; dy = d2[1];
+      }
+    }
+    return { segs, hits };
+  }
+
+  /* -------------------------------------------------- 生成 */
+
+  function generate(n) {
+    const rnd = CG.util.rng((n * 2654435761 + 101) >>> 0);
+    const size = 7 + Math.min(2, Math.floor((n - 1) / 4));
+    g.cols = size;
+    g.rows = size;
+
+    for (let attempt = 0; attempt < 80; attempt++) {
+      const side = Math.floor(rnd() * 4);
+      let sx, sy, dir;
+      if (side === 0) { sx = 1 + Math.floor(rnd() * (size - 2)); sy = 0; dir = [0, 1]; }
+      else if (side === 1) { sx = 1 + Math.floor(rnd() * (size - 2)); sy = size - 1; dir = [0, -1]; }
+      else if (side === 2) { sx = 0; sy = 1 + Math.floor(rnd() * (size - 2)); dir = [1, 0]; }
+      else { sx = size - 1; sy = 1 + Math.floor(rnd() * (size - 2)); dir = [-1, 0]; }
+
+      const mirrors = new Map();
+      const path = [{ x: sx, y: sy }];
+      let x = sx, y = sy, dx = dir[0], dy = dir[1];
+      let turns = 0;
+      const wantTurns = 2 + Math.min(3, Math.floor(n / 3));
+
+      for (let step = 0; step < 200; step++) {
+        const nx = x + dx, ny = y + dy;
+        if (!inside(nx, ny)) break;
+        x = nx; y = ny;
+        path.push({ x, y });
+
+        if (turns < wantTurns && path.length > 3 && rnd() < 0.42) {
+          const opts = ['/', '\\'].filter((ch) => {
+            const d2 = turn(ch, [dx, dy]);
+            return inside(x + d2[0], y + d2[1]);
+          });
+          if (opts.length) {
+            const ch = opts[Math.floor(rnd() * opts.length)];
+            mirrors.set(key(x, y), ch);
+            const d2 = turn(ch, [dx, dy]);
+            dx = d2[0]; dy = d2[1];
+            turns++;
+          }
+        }
+      }
+
+      if (turns < 2 || path.length < 8 || mirrors.size < 2) continue;
+
+      const pool = path.slice(4).filter((c) => !mirrors.has(key(c.x, c.y)));
+      if (pool.length < 3) continue;
+
+      const count = 2 + Math.min(2, Math.floor(n / 4));
+      const targets = new Set(CG.util.shuffle(pool).slice(0, count).map((c) => key(c.x, c.y)));
+
+      g.solution = Object.fromEntries(mirrors);
+      const start = new Map();
+      mirrors.forEach((ch, k) => start.set(k, rnd() < 0.5 ? '/' : '\\'));
+
+      g.source = { x: sx, y: sy, dir };
+      g.targets = targets;
+      g.mirrors = start;
+
+      // 初始状态如果已经解开，翻一面镜子
+      if (trace().hits.size >= targets.size) {
+        const first = [...start.keys()][0];
+        start.set(first, start.get(first) === '/' ? '\\' : '/');
+      }
+
+      g.mirrors = start;
+      g.level = n;
+      g.solved = false;
+
+      if (trace().hits.size < targets.size) { syncHud(); return; }
+    }
+
+    // 兜底谜题
+    g.cols = 7; g.rows = 7;
+    g.source = { x: 0, y: 3, dir: [1, 0] };
+    g.targets = new Set([key(3, 1), key(5, 3)]);
+    g.mirrors = new Map([[key(3, 3), '/'], [key(3, 1), '\\']]);
+    g.level = n;
+    g.solved = false;
+    syncHud();
+  }
+
+  function syncHud() {
+    const res = trace();
+    hud.level.textContent = g.level;
+    hud.hits.textContent = res.hits.size + '/' + g.targets.size;
+    hud.mirrors.textContent = g.mirrors.size;
+  }
+
+  function checkWin() {
+    if (g.solved) return;
+    if (trace().hits.size >= g.targets.size) {
+      g.solved = true;
+      winLevel();
+    }
+  }
+
+  async function winLevel() {
+    if (busy) return;
+    busy = true;
+    CG.sfx.win();
+    const n = g.level;
+    prog.reach(n + 1);
+    prog.win(n * 100);
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 关 · 全部点亮',
+      text: '镜子数量：<b>' + g.mirrors.size + '</b>',
+      actions: [
+        { label: '下一关', value: 'next', primary: true },
+        { label: '重玩本关', value: 'again' }
+      ]
+    });
+    busy = false;
+    buildLevel(r === 'next' ? n + 1 : n);
+  }
+
+  function buildLevel(n) {
+    generate(n);
+    syncHud();
+  }
+
+  /* -------------------------------------------------- 绘制 */
+
+  function draw() {
+    const c = CG.colors();
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const grid = CG.util.grid(W, H, g.cols, g.rows, 24);
+    const { cell, ox, oy } = grid;
+    const cx = (x) => ox + x * cell + cell / 2;
+    const cy = (y) => oy + y * cell + cell / 2;
+
+    ctx.strokeStyle = c.line;
+    ctx.lineWidth = 1;
+    for (let y = 0; y <= g.rows; y++) {
+      ctx.beginPath(); ctx.moveTo(ox, oy + y * cell); ctx.lineTo(ox + g.cols * cell, oy + y * cell); ctx.stroke();
+    }
+    for (let x = 0; x <= g.cols; x++) {
+      ctx.beginPath(); ctx.moveTo(ox + x * cell, oy); ctx.lineTo(ox + x * cell, oy + g.rows * cell); ctx.stroke();
+    }
+
+    const res = trace();
+
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = c.danger;
+    ctx.globalAlpha = 0.28;
+    ctx.lineWidth = cell * 0.3;
+    ctx.beginPath();
+    res.segs.forEach((p, i) => {
+      const X = cx(p.x), Y = cy(p.y);
+      if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    });
+    ctx.stroke();
+
+    ctx.globalAlpha = 1;
+    ctx.strokeStyle = c.danger;
+    ctx.lineWidth = Math.max(2, cell * 0.075);
+    ctx.shadowColor = c.danger;
+    ctx.shadowBlur = c.light ? 4 : 18;
+    ctx.beginPath();
+    res.segs.forEach((p, i) => {
+      const X = cx(p.x), Y = cy(p.y);
+      if (i === 0) ctx.moveTo(X, Y); else ctx.lineTo(X, Y);
+    });
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    g.targets.forEach((k) => {
+      const [x, y] = unkey(k);
+      const lit = res.hits.has(k);
+      ctx.strokeStyle = lit ? c.accent : c.muted;
+      ctx.lineWidth = Math.max(2, cell * 0.07);
+      ctx.globalAlpha = lit ? 1 : 0.55;
+      ctx.beginPath();
+      ctx.arc(cx(x), cy(y), cell * 0.27, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+      if (lit) {
+        ctx.fillStyle = c.accent;
+        ctx.shadowColor = c.accent;
+        ctx.shadowBlur = c.light ? 0 : 16;
+        ctx.beginPath();
+        ctx.arc(cx(x), cy(y), cell * 0.1, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+      }
+    });
+
+    g.mirrors.forEach((ch, k) => {
+      const [x, y] = unkey(k);
+      const X = cx(x), Y = cy(y);
+      const r = cell * 0.3;
+      ctx.strokeStyle = c.text;
+      ctx.lineWidth = Math.max(3, cell * 0.11);
+      ctx.lineCap = 'round';
+      ctx.shadowColor = c.accent;
+      ctx.shadowBlur = c.light ? 0 : 14;
+      ctx.beginPath();
+      if (ch === '/') { ctx.moveTo(X + r, Y + r); ctx.lineTo(X - r, Y - r); }
+      else { ctx.moveTo(X - r, Y + r); ctx.lineTo(X + r, Y - r); }
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+    });
+
+    const sx = cx(g.source.x), sy = cy(g.source.y);
+    const d = g.source.dir;
+    ctx.fillStyle = c.danger;
+    ctx.shadowColor = c.danger;
+    ctx.shadowBlur = c.light ? 0 : 20;
+    ctx.beginPath();
+    ctx.arc(sx, sy, cell * 0.2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.strokeStyle = c.danger;
+    ctx.lineWidth = Math.max(2, cell * 0.06);
+    ctx.beginPath();
+    ctx.moveTo(sx, sy);
+    ctx.lineTo(sx + d[0] * cell * 0.42, sy + d[1] * cell * 0.42);
+    ctx.stroke();
+  }
+
+  CG.loop(() => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildLevel(g.level);
+    }
+    draw();
+  });
+
+  /* -------------------------------------------------- 输入 */
+
+  function cellAt(e) {
+    const grid = CG.util.grid(W, H, g.cols, g.rows, 24);
+    const r = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - r.left - grid.ox) / grid.cell);
+    const y = Math.floor((e.clientY - r.top - grid.oy) / grid.cell);
+    if (x < 0 || y < 0 || x >= g.cols || y >= g.rows) return null;
+    return [x, y];
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (busy || g.solved) return;
+    const cell = cellAt(e);
+    if (!cell) return;
+    const k = key(cell[0], cell[1]);
+    if (!g.mirrors.has(k)) return;
+    g.mirrors.set(k, g.mirrors.get(k) === '/' ? '\\' : '/');
+    CG.sfx.click();
+    syncHud();
+    checkWin();
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'r' || e.key === 'R') { if (!busy) buildLevel(g.level); }
+  });
+  $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
+  window.__lasers = g;
+})();
+</script>
+</body>
+</html>

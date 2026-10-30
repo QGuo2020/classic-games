@@ -1,0 +1,488 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>一笔画 · 连线 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">一笔画 · 连线<small>Flow Free</small></div>
+  <div class="hud">
+    <span class="stat">关卡<b id="hudLevel">1</b></span>
+    <span class="stat">连线<b id="hudPairs">0/4</b></span>
+    <span class="stat">铺满<b id="hudFill">0%</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnClear">清空 <kbd>C</kbd></button>
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <span class="spacer"></span>
+  <span class="note">从圆点按住拖动，连满整张网格即过关</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const $ = (id) => document.getElementById(id);
+  const hud = { level: $('hudLevel'), pairs: $('hudPairs'), fill: $('hudFill') };
+
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  const PALETTE = ['#5df2d0', '#a78bfa', '#ffd166', '#ff5d78', '#6ea8ff', '#7ee787'];
+  const DIRS4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+  let W = 0, H = 0, ctx = null;
+  let busy = false;
+  let drag = null;
+
+  const g = {
+    level: 1,
+    cols: 5, rows: 5,
+    colors: [],       // [{a:[x,y], b:[x,y], color}]
+    paths: [],        // 玩家画的路径，每色一条
+    owner: [],        // 每个格子被哪条线占用，-1 为空
+    solved: false
+  };
+
+  const prog = CG.progress('flow');
+  g.level = Math.max(1, prog.level);
+
+  const key = (x, y) => y * g.cols + x;
+  const same = (p, q) => p[0] === q[0] && p[1] === q[1];
+  const adj = (p, q) => Math.abs(p[0] - q[0]) + Math.abs(p[1] - q[1]) === 1;
+
+  /* -------------------------------------------------- 关卡生成
+     1. 在网格上找一条哈密顿路径（每格恰好走一次）
+     2. 把路径切成 k 段，每段一种颜色
+     所以关卡一定存在「不交叉 + 铺满」的解法 */
+
+  function hamilton(cols, rows, rnd) {
+    const N = cols * rows;
+    const vis = new Uint8Array(N);
+    const path = [];
+    let nodes = 0;
+    const LIMIT = 40000;
+    const at = (x, y) => y * cols + x;
+
+    function connectedOK() {
+      let start = -1, remain = 0;
+      for (let i = 0; i < N; i++) if (!vis[i]) { remain++; if (start < 0) start = i; }
+      if (remain === 0) return true;
+      const seen = new Uint8Array(N);
+      const stack = [start];
+      seen[start] = 1;
+      let cnt = 1;
+      while (stack.length) {
+        const i = stack.pop();
+        const x = i % cols, y = (i / cols) | 0;
+        for (const d of DIRS4) {
+          const nx = x + d[0], ny = y + d[1];
+          if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+          const j = at(nx, ny);
+          if (vis[j] || seen[j]) continue;
+          seen[j] = 1; cnt++; stack.push(j);
+        }
+      }
+      return cnt === remain;
+    }
+
+    function degree(x, y) {
+      let d = 0;
+      for (const dir of DIRS4) {
+        const nx = x + dir[0], ny = y + dir[1];
+        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+        if (!vis[at(nx, ny)]) d++;
+      }
+      return d;
+    }
+
+    function dfs(x, y) {
+      if (++nodes > LIMIT) return false;
+      vis[at(x, y)] = 1;
+      path.push([x, y]);
+      if (path.length === N) return true;
+      if (!connectedOK()) { vis[at(x, y)] = 0; path.pop(); return false; }
+
+      const cands = [];
+      for (const d of DIRS4) {
+        const nx = x + d[0], ny = y + d[1];
+        if (nx < 0 || ny < 0 || nx >= cols || ny >= rows) continue;
+        if (vis[at(nx, ny)]) continue;
+        cands.push({ x: nx, y: ny, d: degree(nx, ny) });
+      }
+      cands.sort((a, b) => a.d - b.d + (rnd() - 0.5) * 0.9);
+      for (const c of cands) {
+        if (dfs(c.x, c.y)) return true;
+      }
+      vis[at(x, y)] = 0;
+      path.pop();
+      return false;
+    }
+
+    return dfs(Math.floor(rnd() * cols), Math.floor(rnd() * rows)) ? path : null;
+  }
+
+  function serpentine(cols, rows) {
+    const p = [];
+    for (let y = 0; y < rows; y++) {
+      for (let i = 0; i < cols; i++) p.push([y % 2 === 0 ? i : cols - 1 - i, y]);
+    }
+    return p;
+  }
+
+  function makeCuts(N, k, rnd) {
+    for (let t = 0; t < 400; t++) {
+      const cs = [];
+      for (let i = 0; i < k - 1; i++) cs.push(3 + Math.floor(rnd() * (N - 6)));
+      cs.sort((a, b) => a - b);
+      let ok = true, prev = 0;
+      for (const c of cs) {
+        if (c - prev < 3) { ok = false; break; }
+        prev = c;
+      }
+      if (ok && N - prev < 3) ok = false;
+      if (ok) return cs;
+    }
+    return null;
+  }
+
+  function buildLevel(n) {
+    const cols = 5 + Math.min(2, Math.floor(n / 3));
+    const rows = cols;
+    const colorCount = Math.min(6, 4 + Math.floor(n / 4));
+    const N = cols * rows;
+
+    let path = null;
+    for (let i = 0; i < 6 && !path; i++) {
+      path = hamilton(cols, rows, CG.util.rng((n * 7919 + i * 104729 + 17) >>> 0));
+    }
+    if (!path) path = serpentine(cols, rows);
+
+    let segs = null;
+    for (let t = 0; t < 300 && !segs; t++) {
+      const cs = makeCuts(N, colorCount, Math.random);
+      if (!cs) continue;
+      const out = [];
+      let prev = 0;
+      for (const c of cs) { out.push(path.slice(prev, c)); prev = c; }
+      out.push(path.slice(prev));
+
+      let bad = false;
+      for (const s of out) {
+        if (adj(s[0], s[s.length - 1])) { bad = true; break; }
+      }
+      if (!bad) segs = out;
+    }
+    if (!segs) {
+      segs = [];
+      const step = Math.floor(N / colorCount);
+      for (let i = 0; i < colorCount; i++) {
+        const s = i * step;
+        const e = i === colorCount - 1 ? N : (i + 1) * step;
+        segs.push(path.slice(s, e));
+      }
+    }
+
+    g.cols = cols;
+    g.solution = segs;
+    g.rows = rows;
+    g.colors = segs.map((seg, i) => ({
+      id: i,
+      color: PALETTE[i % PALETTE.length],
+      a: seg[0].slice(),
+      b: seg[seg.length - 1].slice()
+    }));
+    g.paths = g.colors.map(() => []);
+    g.owner = new Array(cols * rows).fill(-1);
+    g.level = n;
+    g.solved = false;
+    drag = null;
+    syncHud();
+  }
+
+  function pairDone(i) {
+    const p = g.paths[i];
+    if (!p || p.length < 2) return false;
+    const c = g.colors[i];
+    return (same(p[0], c.a) && same(p[p.length - 1], c.b)) ||
+           (same(p[0], c.b) && same(p[p.length - 1], c.a));
+  }
+
+  function filledCount() {
+    return g.owner.filter((o) => o >= 0).length;
+  }
+
+  function syncHud() {
+    let done = 0;
+    for (let i = 0; i < g.colors.length; i++) if (pairDone(i)) done++;
+    hud.level.textContent = g.level;
+    hud.pairs.textContent = done + '/' + g.colors.length;
+    hud.fill.textContent = Math.round((filledCount() / (g.cols * g.rows)) * 100) + '%';
+  }
+
+  function checkWin() {
+    if (g.solved) return;
+    if (filledCount() !== g.cols * g.rows) return;
+    for (let i = 0; i < g.colors.length; i++) if (!pairDone(i)) return;
+    g.solved = true;
+    winLevel();
+  }
+
+  async function winLevel() {
+    if (busy) return;
+    busy = true;
+    drag = null;
+    CG.sfx.win();
+    const n = g.level;
+    prog.reach(n + 1);
+    prog.win(n * 100);
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 关 · 铺满',
+      text: '全部 ' + g.colors.length + ' 条线连通，网格全部铺满。',
+      actions: [
+        { label: '下一关', value: 'next', primary: true },
+        { label: '再来一局', value: 'again' }
+      ]
+    });
+    busy = false;
+    buildLevel(r === 'next' ? n + 1 : n);
+  }
+
+  /* -------------------------------------------------- 交互 */
+
+  function cellAt(e) {
+    const grid = CG.util.grid(W, H, g.cols, g.rows, 18);
+    const r = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - r.left - grid.ox) / grid.cell);
+    const y = Math.floor((e.clientY - r.top - grid.oy) / grid.cell);
+    if (x < 0 || y < 0 || x >= g.cols || y >= g.rows) return null;
+    return [x, y];
+  }
+
+  function truncate(color, idx) {
+    const p = g.paths[color];
+    for (let i = idx + 1; i < p.length; i++) {
+      g.owner[key(p[i][0], p[i][1])] = -1;
+    }
+    p.length = idx + 1;
+  }
+
+  function clearColor(color) {
+    for (const c of g.paths[color]) g.owner[key(c[0], c[1])] = -1;
+    g.paths[color] = [];
+  }
+
+  function endpointColor(cell) {
+    for (let i = 0; i < g.colors.length; i++) {
+      const col = g.colors[i];
+      if (same(col.a, cell) || same(col.b, cell)) return i;
+    }
+    return -1;
+  }
+
+  function startDrag(cell) {
+    if (busy || g.solved) return;
+
+    // 按在已有的线上：从该处截断后继续画
+    const owner = g.owner[key(cell[0], cell[1])];
+    if (owner >= 0) {
+      const p = g.paths[owner];
+      const j = p.findIndex((q) => same(q, cell));
+      if (j < 0) return;
+      truncate(owner, j);
+      drag = { color: owner, done: false };
+      CG.sfx.click();
+      syncHud();
+      return;
+    }
+
+    // 按在端点上：重新开始画这条线
+    const ep = endpointColor(cell);
+    if (ep < 0) return;
+    const p = g.paths[ep];
+    const j = p.findIndex((q) => same(q, cell));
+    if (j >= 0) truncate(ep, j);
+    else { clearColor(ep); g.paths[ep] = [cell]; }
+    g.owner[key(cell[0], cell[1])] = ep;
+
+    drag = { color: ep, done: false };
+    CG.sfx.click();
+    syncHud();
+  }
+
+  function extend(cell) {
+    if (!drag || drag.done || g.solved) return;
+    const c = drag.color;
+    const p = g.paths[c];
+    const last = p[p.length - 1];
+    if (!last || same(last, cell) || !adj(last, cell)) return;
+
+    const i = key(cell[0], cell[1]);
+    const owner = g.owner[i];
+
+    if (owner >= 0) {
+      if (owner !== c) return;
+      const idx = p.findIndex((q) => same(q, cell));
+      if (idx >= 0) { truncate(c, idx); syncHud(); }
+      return;
+    }
+
+    const ep = endpointColor(cell);
+    if (ep >= 0 && ep !== c) return;   // 不能穿过别的颜色的端点
+
+    p.push(cell);
+    g.owner[i] = c;
+    CG.sfx.move();
+
+    if (ep === c && p.length > 1) {
+      drag.done = true;
+      CG.sfx.ok();
+    }
+    syncHud();
+    checkWin();
+  }
+
+  /* -------------------------------------------------- 绘制 */
+
+  function draw() {
+    const c = CG.colors();
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const grid = CG.util.grid(W, H, g.cols, g.rows, 18);
+    const { cell, ox, oy } = grid;
+
+    ctx.fillStyle = c.light ? 'rgba(255,255,255,0.55)' : 'rgba(164,190,225,0.04)';
+    ctx.fillRect(ox, oy, cell * g.cols, cell * g.rows);
+
+    ctx.strokeStyle = c.line;
+    ctx.lineWidth = 1;
+    for (let x = 0; x <= g.cols; x++) {
+      ctx.beginPath();
+      ctx.moveTo(ox + x * cell, oy);
+      ctx.lineTo(ox + x * cell, oy + g.rows * cell);
+      ctx.stroke();
+    }
+    for (let y = 0; y <= g.rows; y++) {
+      ctx.beginPath();
+      ctx.moveTo(ox, oy + y * cell);
+      ctx.lineTo(ox + g.cols * cell, oy + y * cell);
+      ctx.stroke();
+    }
+
+    const cx = (p) => ox + p[0] * cell + cell / 2;
+    const cy = (p) => oy + p[1] * cell + cell / 2;
+
+    g.paths.forEach((p, i) => {
+      if (p.length < 2) return;
+      const color = g.colors[i].color;
+      ctx.strokeStyle = color;
+      ctx.globalAlpha = 0.92;
+      ctx.lineWidth = cell * 0.34;
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+      ctx.shadowColor = color;
+      ctx.shadowBlur = c.light ? 0 : 12;
+      ctx.beginPath();
+      ctx.moveTo(cx(p[0]), cy(p[0]));
+      for (let k = 1; k < p.length; k++) ctx.lineTo(cx(p[k]), cy(p[k]));
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+    });
+
+    g.colors.forEach((col, i) => {
+      [col.a, col.b].forEach((pt) => {
+        const done = pairDone(i);
+        ctx.fillStyle = col.color;
+        ctx.shadowColor = col.color;
+        ctx.shadowBlur = c.light ? 0 : done ? 20 : 10;
+        ctx.beginPath();
+        ctx.arc(cx(pt), cy(pt), cell * (done ? 0.24 : 0.21), 0, Math.PI * 2);
+        ctx.fill();
+        ctx.shadowBlur = 0;
+        ctx.strokeStyle = c.bg;
+        ctx.lineWidth = Math.max(1.5, cell * 0.05);
+        ctx.stroke();
+      });
+    });
+  }
+
+  CG.loop(() => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildLevel(g.level);
+    }
+    draw();
+  });
+
+  /* -------------------------------------------------- 输入 */
+
+  canvas.addEventListener('pointerdown', (e) => {
+    const cell = cellAt(e);
+    if (!cell) return;
+    startDrag(cell);
+    if (canvas.setPointerCapture && e.pointerId != null) {
+      try { canvas.setPointerCapture(e.pointerId); } catch (err) {}
+    }
+  });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!drag) return;
+    const cell = cellAt(e);
+    if (cell) extend(cell);
+  });
+
+  const endDrag = () => {
+    if (!drag) return;
+    drag = null;
+    syncHud();
+    checkWin();
+  };
+  canvas.addEventListener('pointerup', endDrag);
+  canvas.addEventListener('pointercancel', endDrag);
+  window.addEventListener('blur', endDrag);
+
+  function clearAll() {
+    if (busy || g.solved) return;
+    g.paths = g.colors.map(() => []);
+    g.owner.fill(-1);
+    drag = null;
+    CG.sfx.click();
+    syncHud();
+  }
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'c' || e.key === 'C') clearAll();
+    if (e.key === 'r' || e.key === 'R') { if (!busy) buildLevel(g.level); }
+  });
+
+  $('btnClear').addEventListener('click', clearAll);
+  window.__flow = g;
+  $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
+})();
+</script>
+</body>
+</html>

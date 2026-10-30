@@ -1,0 +1,453 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>打砖块 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">打砖块<small>Breakout</small></div>
+  <div class="hud">
+    <span class="stat">关卡<b id="hudLevel">1</b></span>
+    <span class="stat">分数<b id="hudScore">0</b></span>
+    <span class="stat">生命<b id="hudLives" class="accent">3</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <button class="btn" id="btnPause">暂停 <kbd>P</kbd></button>
+  <span class="spacer"></span>
+  <span class="note">鼠标 / <kbd>←</kbd> <kbd>→</kbd> 移动挡板 · 点击或 <kbd>空格</kbd> 发射</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const $ = (id) => document.getElementById(id);
+  const hud = { level: $('hudLevel'), score: $('hudScore'), lives: $('hudLives') };
+
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  const PAD_H = 12;
+  const R = 7;
+
+  let W = 0, H = 0, ctx = null;
+  let paused = false;
+  let busy = false;
+
+  const g = {
+    level: 1,
+    score: 0,
+    lives: 3,
+    paddle: { x: 0, y: 0, w: 120, h: PAD_H, target: null },
+    ball: { x: 0, y: 0, vx: 0, vy: 0, stuck: true },
+    bricks: [],
+    speed: 360,
+    keys: { left: false, right: false }
+  };
+
+  const prog = CG.progress('breakout');
+  g.level = Math.max(1, prog.level);
+
+  function conf(n) {
+    return {
+      rows: 3 + Math.min(4, Math.floor((n - 1) / 2)),
+      cols: 9,
+      speed: Math.min(640, 340 + (n - 1) * 22),
+      hpMax: n >= 7 ? 3 : n >= 4 ? 2 : 1,
+      pattern: n % 5
+    };
+  }
+
+  function buildLevel(n) {
+    const c = conf(n);
+    const margin = Math.max(20, W * 0.045);
+    const bw = (W - margin * 2) / c.cols;
+    const bh = Math.max(14, Math.min(30, bw * 0.4));
+    const top = 64;
+    const rnd = CG.util.rng(n * 7919 + 13);
+    const bricks = [];
+
+    for (let r = 0; r < c.rows; r++) {
+      for (let col = 0; col < c.cols; col++) {
+        let on = true;
+        if (c.pattern === 1) on = (r + col) % 2 === 0;
+        else if (c.pattern === 2) on = col >= r && col < c.cols - r;
+        else if (c.pattern === 3) on = col % 3 !== 2;
+        else if (c.pattern === 4) on = Math.abs(col - (c.cols - 1) / 2) + r <= c.cols / 2;
+        if (!on) continue;
+
+        let hp = 1;
+        if (c.hpMax > 2 && rnd() < 0.3) hp = 3;
+        else if (c.hpMax > 1 && rnd() < 0.35) hp = 2;
+
+        bricks.push({
+          x: margin + col * bw + 2,
+          y: top + r * (bh + 7),
+          w: bw - 4,
+          h: bh,
+          hp, max: hp
+        });
+      }
+    }
+    g.bricks = bricks;
+    g.speed = c.speed;
+    g.level = n;
+    g.lives = 3;
+    resetBall();
+    syncHud();
+  }
+
+  function resetBall() {
+    const p = g.paddle;
+    p.w = Math.max(88, Math.min(150, W * 0.2));
+    p.y = H - 46;
+    p.x = CG.util.clamp(W / 2 - p.w / 2, 8, W - p.w - 8);
+    g.ball.x = p.x + p.w / 2;
+    g.ball.y = p.y - R - 2;
+    g.ball.vx = 0;
+    g.ball.vy = 0;
+    g.ball.stuck = true;
+  }
+
+  function syncHud() {
+    hud.level.textContent = g.level;
+    hud.score.textContent = g.score;
+    hud.lives.textContent = g.lives;
+    hud.lives.className = g.lives <= 1 ? 'danger' : 'accent';
+  }
+
+  /* -------------------------------------------------------- 物理 */
+
+  function launch() {
+    if (!g.ball.stuck || paused || busy) return;
+    const a = -Math.PI / 2 + (Math.random() - 0.5) * 0.7;
+    g.ball.vx = Math.cos(a) * g.speed;
+    g.ball.vy = Math.sin(a) * g.speed;
+    g.ball.stuck = false;
+    CG.sfx.bounce();
+  }
+
+  function circleRect(b, r) {
+    const cx = CG.util.clamp(b.x, r.x, r.x + r.w);
+    const cy = CG.util.clamp(b.y, r.y, r.y + r.h);
+    const dx = b.x - cx, dy = b.y - cy;
+    const d2 = dx * dx + dy * dy;
+    if (d2 > b.r * b.r) return null;
+    if (d2 > 0.0001) {
+      const d = Math.sqrt(d2);
+      return { nx: dx / d, ny: dy / d, pen: b.r - d };
+    }
+    const left = b.x - r.x, right = r.x + r.w - b.x;
+    const top = b.y - r.y, bottom = r.y + r.h - b.y;
+    const m = Math.min(left, right, top, bottom);
+    if (m === left) return { nx: -1, ny: 0, pen: left + b.r };
+    if (m === right) return { nx: 1, ny: 0, pen: right + b.r };
+    if (m === top) return { nx: 0, ny: -1, pen: top + b.r };
+    return { nx: 0, ny: 1, pen: bottom + b.r };
+  }
+
+  function bounce(b, hit) {
+    const dot = b.vx * hit.nx + b.vy * hit.ny;
+    if (dot < 0) {
+      b.vx -= 2 * dot * hit.nx;
+      b.vy -= 2 * dot * hit.ny;
+    }
+    b.x += hit.nx * (hit.pen + 0.4);
+    b.y += hit.ny * (hit.pen + 0.4);
+  }
+
+  function stepBall(dt) {
+    const b = g.ball;
+    if (b.stuck) {
+      b.x = g.paddle.x + g.paddle.w / 2;
+      b.y = g.paddle.y - R - 2;
+      return;
+    }
+
+    const dist = Math.hypot(b.vx, b.vy) * dt;
+    const steps = Math.max(1, Math.ceil(dist / (R * 0.8)));
+    const sub = dt / steps;
+
+    for (let s = 0; s < steps; s++) {
+      b.x += b.vx * sub;
+      b.y += b.vy * sub;
+
+      if (b.x - R < 0) { b.x = R; b.vx = Math.abs(b.vx); CG.sfx.bounce(); }
+      if (b.x + R > W) { b.x = W - R; b.vx = -Math.abs(b.vx); CG.sfx.bounce(); }
+      if (b.y - R < 0) { b.y = R; b.vy = Math.abs(b.vy); CG.sfx.bounce(); }
+
+      const p = g.paddle;
+      if (b.vy > 0 && b.y + R > p.y && b.y - R < p.y + p.h + 10 &&
+          b.x > p.x - R && b.x < p.x + p.w + R) {
+        const rel = CG.util.clamp((b.x - (p.x + p.w / 2)) / (p.w / 2), -1, 1);
+        const ang = rel * (Math.PI * 0.42);
+        b.vx = Math.sin(ang) * g.speed;
+        b.vy = -Math.cos(ang) * g.speed;
+        b.y = p.y - R - 0.5;
+        CG.sfx.bounce();
+      }
+
+      for (let i = 0; i < g.bricks.length; i++) {
+        const br = g.bricks[i];
+        const hit = circleRect(b, br);
+        if (!hit) continue;
+        bounce(b, hit);
+        br.hp -= 1;
+        g.score += 10 * g.level;
+        syncHud();
+        if (br.hp <= 0) {
+          g.bricks.splice(i, 1);
+          CG.sfx.hit();
+          if (!g.bricks.length) winLevel();
+        } else {
+          CG.sfx.step();
+        }
+        break;
+      }
+
+      if (b.y - R > H) {
+        loseBall();
+        return;
+      }
+    }
+
+    const minV = g.speed * 0.22;
+    if (Math.abs(b.vy) < minV) b.vy = (b.vy < 0 ? -1 : 1) * minV;
+  }
+
+  function loseBall() {
+    g.lives -= 1;
+    syncHud();
+    CG.sfx.bad();
+    if (g.lives <= 0) gameOver();
+    else resetBall();
+  }
+
+  /* -------------------------------------------------------- 关卡流程 */
+
+  async function winLevel() {
+    if (busy) return;
+    busy = true;
+    CG.sfx.win();
+    const n = g.level;
+    prog.reach(n + 1);
+    prog.win(g.score);
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 关通过',
+      text: '得分 <b>' + g.score + '</b><br>下一关砖块更多、球速更快。',
+      actions: [
+        { label: '下一关', value: 'next', primary: true },
+        { label: '留在这里', value: 'stay' }
+      ]
+    });
+    busy = false;
+    if (r === 'next') {
+      g.score += 50;
+      buildLevel(n + 1);
+    }
+  }
+
+  async function gameOver() {
+    if (busy) return;
+    busy = true;
+    CG.sfx.lose();
+    const r = await CG.ui.modal({
+      title: '生命耗尽',
+      text: '本局得分 <b>' + g.score + '</b><br>重试本关，或从第 1 关重新开始。',
+      actions: [
+        { label: '重试本关', value: 'retry', primary: true },
+        { label: '从第 1 关开始', value: 'reset' }
+      ]
+    });
+    busy = false;
+    if (r === 'reset') {
+      g.score = 0;
+      prog.reset();
+      buildLevel(1);
+    } else {
+      buildLevel(g.level);
+    }
+  }
+
+  /* -------------------------------------------------------- 绘制 */
+
+  function roundRect(x, y, w, h, r) {
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.beginPath();
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+  }
+
+  function draw() {
+    const c = CG.colors();
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.strokeStyle = c.line;
+    ctx.lineWidth = 1;
+    const gs = 48;
+    for (let x = (W % gs) / 2; x < W; x += gs) {
+      ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, H); ctx.stroke();
+    }
+    for (let y = (H % gs) / 2; y < H; y += gs) {
+      ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(W, y); ctx.stroke();
+    }
+
+    g.bricks.forEach((b) => {
+      const t = b.hp / b.max;
+      const col = b.hp >= 3 ? c.violet : b.hp === 2 ? c.hint : c.accent;
+      ctx.globalAlpha = 0.35 + 0.65 * t;
+      ctx.fillStyle = col;
+      ctx.shadowColor = col;
+      ctx.shadowBlur = c.light ? 0 : 14;
+      roundRect(b.x, b.y, b.w, b.h, 5);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+      if (b.hp > 1) {
+        ctx.strokeStyle = c.bg;
+        ctx.globalAlpha = 0.5;
+        ctx.lineWidth = 1.5;
+        roundRect(b.x + 4, b.y + 4, b.w - 8, b.h - 8, 3);
+        ctx.stroke();
+        ctx.globalAlpha = 1;
+      }
+    });
+
+    const p = g.paddle;
+    ctx.fillStyle = c.text;
+    ctx.shadowColor = c.accent;
+    ctx.shadowBlur = c.light ? 0 : 18;
+    roundRect(p.x, p.y, p.w, p.h, 6);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    const b = g.ball;
+    ctx.fillStyle = c.accent;
+    ctx.shadowColor = c.accent;
+    ctx.shadowBlur = c.light ? 0 : 22;
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, R, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+
+    if (b.stuck && !busy) {
+      ctx.fillStyle = c.muted;
+      ctx.font = '13px ' + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = 'center';
+      ctx.fillText('点击 / 空格 发射', W / 2, p.y - 42);
+    }
+  }
+
+  /* -------------------------------------------------------- 循环 */
+
+  function update(dt) {
+    if (paused || busy) return;
+    const p = g.paddle;
+    const speedKey = 620;
+    if (g.keys.left) p.x -= speedKey * dt;
+    if (g.keys.right) p.x += speedKey * dt;
+    if (p.target != null) {
+      const goal = p.target - p.w / 2;
+      const d = goal - p.x;
+      if (Math.abs(d) > 0.5) p.x += d * Math.min(1, dt * 24);
+    }
+    p.x = CG.util.clamp(p.x, 4, W - p.w - 4);
+    stepBall(dt);
+  }
+
+  CG.loop((dt) => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildLevel(g.level);
+      g.paddle.y = H - 46;
+    }
+    update(dt);
+    draw();
+  });
+
+  /* -------------------------------------------------------- 输入 */
+
+  canvas.addEventListener('pointermove', (e) => {
+    const r = canvas.getBoundingClientRect();
+    g.paddle.target = e.clientX - r.left;
+  });
+  canvas.addEventListener('pointerdown', (e) => {
+    const r = canvas.getBoundingClientRect();
+    g.paddle.target = e.clientX - r.left;
+    launch();
+  });
+  canvas.addEventListener('pointerleave', () => { g.paddle.target = null; });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'a') { g.keys.left = true; g.paddle.target = null; }
+    if (e.key === 'ArrowRight' || e.key === 'd') { g.keys.right = true; g.paddle.target = null; }
+    if (e.code === 'Space') { e.preventDefault(); launch(); }
+    if (e.key === 'r' || e.key === 'R') restartLevel();
+    if (e.key === 'p' || e.key === 'P') togglePause();
+  });
+  document.addEventListener('keyup', (e) => {
+    if (e.key === 'ArrowLeft' || e.key === 'a') g.keys.left = false;
+    if (e.key === 'ArrowRight' || e.key === 'd') g.keys.right = false;
+  });
+
+  function restartLevel() {
+    if (busy) return;
+    g.lives = 3;
+    buildLevel(g.level);
+    CG.sfx.click();
+  }
+
+  async function togglePause() {
+    if (busy || paused) return;
+    paused = true;
+    await CG.ui.modal({
+      title: '已暂停',
+      text: '按 P 或点击继续。',
+      actions: [{ label: '继续', value: 'resume', primary: true }]
+    });
+    paused = false;
+  }
+
+  $('btnRestart').addEventListener('click', restartLevel);
+  $('btnPause').addEventListener('click', togglePause);
+  window.__breakout = g;
+
+  (function boot() {
+    const fit = CG.util.fit(canvas);
+    W = fit.w; H = fit.h;
+    buildLevel(g.level);
+    if (g.level > 1) CG.ui.toast('从第 ' + g.level + ' 关继续');
+  })();
+})();
+</script>
+</body>
+</html>

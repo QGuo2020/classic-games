@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>冰面滑行 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">冰面滑行<small>Ice Slide</small></div>
+  <div class="hud">
+    <span class="stat">关卡<b id="hudLevel">1</b></span>
+    <span class="stat">宝石<b id="hudGems">0/3</b></span>
+    <span class="stat">步数<b id="hudMoves">0</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <button class="btn" id="btnUndo">撤销 <kbd>Z</kbd></button>
+  <span class="spacer"></span>
+  <span class="note">方向键 / WASD / 滑动 · 撞上石头才会停</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const $ = (id) => document.getElementById(id);
+  const hud = { level: $('hudLevel'), gems: $('hudGems'), moves: $('hudMoves') };
+
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+
+  let W = 0, H = 0, ctx = null;
+  let busy = false;
+
+  const g = {
+    level: 1,
+    cols: 9, rows: 9,
+    walls: new Set(),
+    gems: new Set(),
+    gemTotal: 3,
+    player: { x: 1, y: 1 },
+    visual: { x: 1, y: 1 },
+    anim: null,
+    moves: 0,
+    history: [],
+    solved: false
+  };
+
+  const prog = CG.progress('ice');
+  g.level = Math.max(1, prog.level);
+
+  const key = (x, y) => x + ',' + y;
+  const unkey = (k) => k.split(',').map(Number);
+
+  /* -------------------------------------------------- 生成 */
+
+  function slidesFrom(state, walls) {
+    const out = [];
+    DIRS.forEach((d) => {
+      let x = state.x, y = state.y, moved = false;
+      while (true) {
+        const nx = x + d[0], ny = y + d[1];
+        if (walls.has(key(nx, ny))) break;
+        x = nx; y = ny; moved = true;
+      }
+      if (moved) out.push({ x, y });
+    });
+    return out;
+  }
+
+  function place(cols, rows, walls, gems, total, start) {
+    g.cols = cols;
+    g.rows = rows;
+    g.walls = walls;
+    g.gems = gems;
+    g.gemTotal = total;
+    g.player = { x: start.x, y: start.y };
+    g.visual = { x: start.x, y: start.y };
+    g.anim = null;
+    g.moves = 0;
+    g.history = [];
+    g.solved = false;
+    syncHud();
+  }
+
+  function buildLevel(n) {
+    const rnd = CG.util.rng((n * 15485863 + 7) >>> 0);
+    const size = 8 + Math.min(3, Math.floor(n / 3));
+    const gemCount = 3 + Math.min(4, Math.floor((n - 1) / 2));
+
+    for (let attempt = 0; attempt < 150; attempt++) {
+      const cols = size, rows = size;
+      const walls = new Set();
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          if (x === 0 || y === 0 || x === cols - 1 || y === rows - 1) {
+            walls.add(key(x, y));
+            continue;
+          }
+          const p = 0.1 + Math.min(0.12, n * 0.008);
+          if (rnd() < p) walls.add(key(x, y));
+        }
+      }
+
+      const floors = [];
+      for (let y = 1; y < rows - 1; y++) {
+        for (let x = 1; x < cols - 1; x++) {
+          if (!walls.has(key(x, y))) floors.push({ x, y });
+        }
+      }
+      if (floors.length < 12) continue;
+
+      const start = floors[Math.floor(rnd() * floors.length)];
+
+      // 只从滑行能到达的停靠点里选宝石，保证一定能拿到
+      const stops = new Map();
+      const queue = [start];
+      stops.set(key(start.x, start.y), start);
+      while (queue.length) {
+        const cur = queue.shift();
+        for (const nx of slidesFrom(cur, walls)) {
+          const k = key(nx.x, nx.y);
+          if (stops.has(k)) continue;
+          stops.set(k, nx);
+          queue.push(nx);
+        }
+      }
+
+      const list = [...stops.values()].filter((c) => !(c.x === start.x && c.y === start.y));
+      if (list.length < gemCount + 4) continue;
+
+      const gems = new Set(CG.util.shuffle(list).slice(0, gemCount).map((c) => key(c.x, c.y)));
+      g.level = n;
+      place(cols, rows, walls, gems, gemCount, start);
+      return;
+    }
+
+    // 兜底：空旷 9x9
+    const cols = 9, rows = 9;
+    const walls = new Set();
+    for (let y = 0; y < rows; y++) {
+      for (let x = 0; x < cols; x++) {
+        if (x === 0 || y === 0 || x === cols - 1 || y === rows - 1) walls.add(key(x, y));
+      }
+    }
+    g.level = n;
+    place(cols, rows, walls, new Set([key(4, 2), key(2, 4), key(6, 6)]), 3, { x: 4, y: 4 });
+  }
+
+  function syncHud() {
+    hud.level.textContent = g.level;
+    hud.gems.textContent = (g.gemTotal - g.gems.size) + '/' + g.gemTotal;
+    hud.moves.textContent = g.moves;
+  }
+
+  /* -------------------------------------------------- 移动 */
+
+  function move(dx, dy) {
+    if (busy || g.solved || g.anim) return;
+
+    let x = g.player.x, y = g.player.y;
+    const path = [];
+    while (true) {
+      const nx = x + dx, ny = y + dy;
+      if (g.walls.has(key(nx, ny))) break;
+      x = nx; y = ny;
+      path.push({ x, y });
+    }
+    if (!path.length) return;
+
+    g.history.push({
+      player: { x: g.player.x, y: g.player.y },
+      gems: [...g.gems],
+      moves: g.moves
+    });
+    if (g.history.length > 200) g.history.shift();
+
+    let got = 0;
+    path.forEach((c) => {
+      const k = key(c.x, c.y);
+      if (g.gems.has(k)) { g.gems.delete(k); got++; }
+    });
+
+    g.moves += 1;
+    g.player = { x, y };
+    g.anim = {
+      from: { x: g.visual.x, y: g.visual.y },
+      to: { x, y },
+      t: 0,
+      dur: Math.min(0.32, 0.045 * path.length + 0.06)
+    };
+
+    if (got) CG.sfx.ok(); else CG.sfx.step();
+    syncHud();
+  }
+
+  function undo() {
+    if (busy || g.anim || !g.history.length) return;
+    const s = g.history.pop();
+    g.player = s.player;
+    g.visual = { x: s.player.x, y: s.player.y };
+    g.gems = new Set(s.gems);
+    g.moves = s.moves;
+    g.solved = false;
+    CG.sfx.click();
+    syncHud();
+  }
+
+  function checkWin() {
+    if (g.solved || g.gems.size > 0) return;
+    g.solved = true;
+    winLevel();
+  }
+
+  async function winLevel() {
+    if (busy) return;
+    busy = true;
+    CG.sfx.win();
+    const n = g.level;
+    prog.reach(n + 1);
+    prog.win(Math.max(0, 400 - g.moves * 8));
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 关 · 宝石收集完毕',
+      text: '用了 <b>' + g.moves + '</b> 步<br>下一关场地更大、石头更多。',
+      actions: [
+        { label: '下一关', value: 'next', primary: true },
+        { label: '重玩本关', value: 'again' }
+      ]
+    });
+    busy = false;
+    buildLevel(r === 'next' ? n + 1 : n);
+  }
+
+  /* -------------------------------------------------- 绘制 */
+
+  function draw(dt) {
+    const c = CG.colors();
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const grid = CG.util.grid(W, H, g.cols, g.rows, 16);
+    const { cell, ox, oy } = grid;
+
+    const grad = ctx.createLinearGradient(ox, oy, ox + cell * g.cols, oy + cell * g.rows);
+    if (c.light) {
+      grad.addColorStop(0, 'rgba(140,190,230,0.30)');
+      grad.addColorStop(1, 'rgba(120,170,220,0.16)');
+    } else {
+      grad.addColorStop(0, 'rgba(93,242,208,0.10)');
+      grad.addColorStop(1, 'rgba(110,168,255,0.07)');
+    }
+    ctx.fillStyle = grad;
+    ctx.fillRect(ox, oy, cell * g.cols, cell * g.rows);
+
+    ctx.strokeStyle = c.line;
+    ctx.lineWidth = 1;
+    for (let y = 0; y <= g.rows; y++) {
+      ctx.beginPath();
+      ctx.moveTo(ox, oy + y * cell);
+      ctx.lineTo(ox + g.cols * cell, oy + y * cell);
+      ctx.stroke();
+    }
+    for (let x = 0; x <= g.cols; x++) {
+      ctx.beginPath();
+      ctx.moveTo(ox + x * cell, oy);
+      ctx.lineTo(ox + x * cell, oy + g.rows * cell);
+      ctx.stroke();
+    }
+
+    ctx.fillStyle = c.light ? 'rgba(45,72,100,0.35)' : 'rgba(164,190,225,0.24)';
+    g.walls.forEach((k) => {
+      const [x, y] = unkey(k);
+      const inset = cell * 0.06;
+      const rr = cell * 0.2;
+      const px = ox + x * cell + inset, py = oy + y * cell + inset;
+      const s = cell - inset * 2;
+      ctx.beginPath();
+      ctx.moveTo(px + rr, py);
+      ctx.arcTo(px + s, py, px + s, py + s, rr);
+      ctx.arcTo(px + s, py + s, px, py + s, rr);
+      ctx.arcTo(px, py + s, px, py, rr);
+      ctx.arcTo(px, py, px + s, py, rr);
+      ctx.closePath();
+      ctx.fill();
+    });
+
+    const t = performance.now() / 500;
+    g.gems.forEach((k) => {
+      const [x, y] = unkey(k);
+      const cx = ox + x * cell + cell / 2;
+      const cy = oy + y * cell + cell / 2;
+      const r = cell * (0.18 + 0.02 * Math.sin(t * 2 + x));
+      ctx.fillStyle = c.hint;
+      ctx.shadowColor = c.hint;
+      ctx.shadowBlur = c.light ? 0 : 16;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - r);
+      ctx.lineTo(cx + r * 0.78, cy);
+      ctx.lineTo(cx, cy + r);
+      ctx.lineTo(cx - r * 0.78, cy);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+    });
+
+    if (g.anim) {
+      g.anim.t += dt;
+      const k = Math.min(1, g.anim.t / g.anim.dur);
+      const e = 1 - Math.pow(1 - k, 3);
+      g.visual.x = CG.util.lerp(g.anim.from.x, g.anim.to.x, e);
+      g.visual.y = CG.util.lerp(g.anim.from.y, g.anim.to.y, e);
+      if (k >= 1) {
+        g.anim = null;
+        g.visual = { x: g.player.x, y: g.player.y };
+        checkWin();
+      }
+    }
+
+    const px = ox + g.visual.x * cell + cell / 2;
+    const py = oy + g.visual.y * cell + cell / 2;
+    ctx.fillStyle = c.accent;
+    ctx.shadowColor = c.accent;
+    ctx.shadowBlur = c.light ? 0 : 22;
+    ctx.beginPath();
+    ctx.arc(px, py, cell * 0.26, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = c.bg;
+    ctx.beginPath();
+    ctx.arc(px, py, cell * 0.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  /* -------------------------------------------------- 循环 */
+
+  CG.loop((dt) => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildLevel(g.level);
+    }
+    draw(dt);
+  });
+
+  /* -------------------------------------------------- 输入 */
+
+  document.addEventListener('keydown', (e) => {
+    const k = e.key;
+    if (k === 'ArrowUp' || k === 'w' || k === 'W') { move(0, -1); e.preventDefault(); }
+    else if (k === 'ArrowDown' || k === 's' || k === 'S') { move(0, 1); e.preventDefault(); }
+    else if (k === 'ArrowLeft' || k === 'a' || k === 'A') { move(-1, 0); e.preventDefault(); }
+    else if (k === 'ArrowRight' || k === 'd' || k === 'D') { move(1, 0); e.preventDefault(); }
+    else if (k === 'z' || k === 'Z') undo();
+    else if (k === 'r' || k === 'R') { if (!busy) buildLevel(g.level); }
+  });
+
+  CG.util.swiper(canvas, (dir) => {
+    if (dir === 'up') move(0, -1);
+    if (dir === 'down') move(0, 1);
+    if (dir === 'left') move(-1, 0);
+    if (dir === 'right') move(1, 0);
+  });
+
+  $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
+  $('btnUndo').addEventListener('click', undo);
+})();
+</script>
+</body>
+</html>

@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>推箱子 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">推箱子<small>Sokoban</small></div>
+  <div class="hud">
+    <span class="stat">关卡<b id="hudLevel">1</b></span>
+    <span class="stat">箱子<b id="hudBoxes">0/0</b></span>
+    <span class="stat">步数<b id="hudMoves">0</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnUndo">撤销 <kbd>Z</kbd></button>
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <button class="btn" id="btnSkip">换一关</button>
+  <span class="spacer"></span>
+  <span class="note">方向键 / WASD / 滑动 · 只能推不能拉</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const $ = (id) => document.getElementById(id);
+  const hud = { level: $('hudLevel'), boxes: $('hudBoxes'), moves: $('hudMoves') };
+
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  const DIRS = [
+    { x: 0, y: -1 },
+    { x: 0, y: 1 },
+    { x: -1, y: 0 },
+    { x: 1, y: 0 }
+  ];
+
+  const FALLBACK = [
+    '#########',
+    '#       #',
+    '#  . .  #',
+    '#  $ $  #',
+    '#   @   #',
+    '#       #',
+    '#########'
+  ];
+
+  let W = 0, H = 0, ctx = null;
+  let busy = false;
+
+  const g = {
+    level: 1,
+    cols: 9, rows: 9,
+    walls: new Set(),
+    goals: new Set(),
+    boxes: new Set(),
+    player: { x: 1, y: 1 },
+    moves: 0,
+    history: [],
+    solved: false
+  };
+
+  const prog = CG.progress('sokoban');
+  g.level = Math.max(1, prog.level);
+
+  const key = (x, y) => x + ',' + y;
+  const unkey = (k) => k.split(',').map(Number);
+
+  /* -------------------------------------------------- 反向生成关卡
+     从「所有箱子都在目标点上」的已解状态出发，随机做「拉箱子」的逆动作
+     （玩家后退一格、箱子跟进一格）。把这一串动作倒过来，就是一条真实可行的
+     推箱解法，所以生成的关卡必定可解。 */
+
+  function generate(n, salt) {
+    const seed = (n * 2654435761 + (salt || 0) * 40503) >>> 0;
+    const rnd = CG.util.rng(seed);
+
+    for (let attempt = 0; attempt < 40; attempt++) {
+      const size = 7 + Math.min(4, Math.floor(n / 4));
+      const cols = size + (n > 6 ? 1 : 0);
+      const rows = size;
+      const boxCount = 1 + Math.min(4, Math.floor((n + 1) / 3));
+
+      const walls = new Set();
+      const free = [];
+
+      for (let y = 0; y < rows; y++) {
+        for (let x = 0; x < cols; x++) {
+          if (x === 0 || y === 0 || x === cols - 1 || y === rows - 1) {
+            walls.add(key(x, y));
+            continue;
+          }
+          const pillar = rnd() < 0.05 + Math.min(0.08, n * 0.006);
+          if (pillar) walls.add(key(x, y));
+          else free.push({ x, y });
+        }
+      }
+
+      if (free.length < boxCount + 14) continue;
+
+      const pool = CG.util.shuffle(free);
+      const boxes = new Set(pool.slice(0, boxCount).map((c) => key(c.x, c.y)));
+      const goals = new Set(boxes);
+
+      // 玩家必须站在某个箱子旁边，反向拉才有第一步
+      const adj = [];
+      for (const c of pool.slice(0, boxCount)) {
+        for (const d of DIRS) {
+          const p = { x: c.x + d.x, y: c.y + d.y };
+          if (p.x < 1 || p.y < 1 || p.x >= cols - 1 || p.y >= rows - 1) continue;
+          const k = key(p.x, p.y);
+          if (walls.has(k) || boxes.has(k)) continue;
+          if (!adj.some((q) => q.x === p.x && q.y === p.y)) adj.push(p);
+        }
+      }
+      if (!adj.length) continue;
+
+      const pick = adj[Math.floor(rnd() * adj.length)];
+      const player = { x: pick.x, y: pick.y };
+
+      let pulls = 0;
+      let guard = 0;
+      const pullTarget = Math.min(120, 14 + n * 5);
+
+      while (pulls < pullTarget && guard++ < 8000) {
+        const d = DIRS[Math.floor(rnd() * 4)];
+        const px = player.x - d.x, py = player.y - d.y;
+        if (px < 1 || py < 1 || px >= cols - 1 || py >= rows - 1) continue;
+        if (walls.has(key(px, py)) || boxes.has(key(px, py))) continue;
+
+        const ahead = key(player.x + d.x, player.y + d.y);
+        if (boxes.has(ahead)) {
+          boxes.delete(ahead);
+          boxes.add(key(player.x, player.y));
+          pulls++;
+        }
+        player.x = px;
+        player.y = py;
+      }
+
+      if (pulls < 8 + n) continue;
+      if ([...boxes].every((k) => goals.has(k))) continue;
+
+      return { cols, rows, walls, goals, boxes, player: { x: player.x, y: player.y }, pulls };
+    }
+    return null;
+  }
+
+  function parseFallback() {
+    const walls = new Set();
+    const goals = new Set();
+    const boxes = new Set();
+    let player = { x: 1, y: 1 };
+
+    FALLBACK.forEach((row, y) => {
+      for (let x = 0; x < row.length; x++) {
+        const ch = row[x];
+        if (ch === '#') walls.add(key(x, y));
+        if (ch === '.' || ch === '*' || ch === '+') goals.add(key(x, y));
+        if (ch === '$' || ch === '*') boxes.add(key(x, y));
+        if (ch === '@' || ch === '+') player = { x, y };
+      }
+    });
+
+    return { cols: FALLBACK[0].length, rows: FALLBACK.length, walls, goals, boxes, player, pulls: 0 };
+  }
+
+  function buildLevel(n, salt) {
+    let lv = generate(n, salt);
+    let guard = 0;
+    while (!lv && guard++ < 5) lv = generate(n, salt + guard + 1);
+    if (!lv) lv = parseFallback();
+
+    g.level = n;
+    g.cols = lv.cols;
+    g.rows = lv.rows;
+    g.walls = lv.walls;
+    g.goals = lv.goals;
+    g.boxes = new Set(lv.boxes);
+    g.player = { x: lv.player.x, y: lv.player.y };
+    g.moves = 0;
+    g.history = [];
+    g.solved = false;
+    syncHud();
+  }
+
+  function syncHud() {
+    let onGoal = 0;
+    g.boxes.forEach((k) => { if (g.goals.has(k)) onGoal++; });
+    hud.level.textContent = g.level;
+    hud.boxes.textContent = onGoal + '/' + g.boxes.size;
+    hud.moves.textContent = g.moves;
+  }
+
+  function snapshot() {
+    g.history.push({
+      boxes: [...g.boxes],
+      player: { x: g.player.x, y: g.player.y },
+      moves: g.moves
+    });
+    if (g.history.length > 300) g.history.shift();
+  }
+
+  function move(dx, dy) {
+    if (busy || g.solved) return;
+    const nx = g.player.x + dx, ny = g.player.y + dy;
+    if (g.walls.has(key(nx, ny))) return;
+
+    if (g.boxes.has(key(nx, ny))) {
+      const bx = nx + dx, by = ny + dy;
+      if (g.walls.has(key(bx, by)) || g.boxes.has(key(bx, by))) return;
+      snapshot();
+      g.boxes.delete(key(nx, ny));
+      g.boxes.add(key(bx, by));
+      g.player = { x: nx, y: ny };
+      g.moves++;
+      CG.sfx.step();
+      syncHud();
+      checkWin();
+      return;
+    }
+
+    snapshot();
+    g.player = { x: nx, y: ny };
+    g.moves++;
+    syncHud();
+  }
+
+  function checkWin() {
+    const done = [...g.boxes].every((k) => g.goals.has(k));
+    if (!done) return;
+    g.solved = true;
+    winLevel();
+  }
+
+  async function winLevel() {
+    if (busy) return;
+    busy = true;
+    CG.sfx.win();
+    const n = g.level;
+    prog.reach(n + 1);
+    prog.win(Math.max(0, 500 - g.moves * 3));
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 关完成',
+      text: '用了 <b>' + g.moves + '</b> 步<br>下一关箱子更多、房间更大。',
+      actions: [
+        { label: '下一关', value: 'next', primary: true },
+        { label: '重玩本关', value: 'again' }
+      ]
+    });
+    busy = false;
+    if (r === 'next') buildLevel(n + 1);
+    else buildLevel(n, 31);
+  }
+
+  function undo() {
+    if (busy || !g.history.length) return;
+    const s = g.history.pop();
+    g.boxes = new Set(s.boxes);
+    g.player = s.player;
+    g.moves = s.moves;
+    g.solved = false;
+    CG.sfx.click();
+    syncHud();
+  }
+
+  /* -------------------------------------------------- 绘制 */
+
+  function draw() {
+    const c = CG.colors();
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const grid = CG.util.grid(W, H, g.cols, g.rows, 16);
+    const { cell, ox, oy } = grid;
+    const pad = Math.max(1, cell * 0.05);
+
+    ctx.fillStyle = c.light ? 'rgba(45,72,100,0.05)' : 'rgba(164,190,225,0.05)';
+    for (let y = 0; y < g.rows; y++) {
+      for (let x = 0; x < g.cols; x++) {
+        if (g.walls.has(key(x, y))) continue;
+        ctx.fillRect(ox + x * cell + pad, oy + y * cell + pad, cell - pad * 2, cell - pad * 2);
+      }
+    }
+
+    ctx.fillStyle = c.light ? 'rgba(45,72,100,0.3)' : 'rgba(164,190,225,0.2)';
+    g.walls.forEach((k) => {
+      const [x, y] = unkey(k);
+      const rr = cell * 0.16;
+      const px = ox + x * cell + pad;
+      const py = oy + y * cell + pad;
+      const s = cell - pad * 2;
+      ctx.beginPath();
+      ctx.moveTo(px + rr, py);
+      ctx.arcTo(px + s, py, px + s, py + s, rr);
+      ctx.arcTo(px + s, py + s, px, py + s, rr);
+      ctx.arcTo(px, py + s, px, py, rr);
+      ctx.arcTo(px, py, px + s, py, rr);
+      ctx.closePath();
+      ctx.fill();
+    });
+
+    g.goals.forEach((k) => {
+      const [x, y] = unkey(k);
+      const cx = ox + x * cell + cell / 2;
+      const cy = oy + y * cell + cell / 2;
+      const r = cell * 0.17;
+      ctx.strokeStyle = c.accent;
+      ctx.lineWidth = Math.max(1.5, cell * 0.06);
+      ctx.globalAlpha = 0.8;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy - r);
+      ctx.lineTo(cx + r, cy);
+      ctx.lineTo(cx, cy + r);
+      ctx.lineTo(cx - r, cy);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    });
+
+    g.boxes.forEach((k) => {
+      const [x, y] = unkey(k);
+      const onGoal = g.goals.has(k);
+      const inset = cell * 0.12;
+      const px = ox + x * cell + inset;
+      const py = oy + y * cell + inset;
+      const s = cell - inset * 2;
+      ctx.fillStyle = onGoal ? c.accent : c.hint;
+      ctx.shadowColor = onGoal ? c.accent : c.hint;
+      ctx.shadowBlur = c.light ? 0 : 12;
+      const rr = cell * 0.12;
+      ctx.beginPath();
+      ctx.moveTo(px + rr, py);
+      ctx.arcTo(px + s, py, px + s, py + s, rr);
+      ctx.arcTo(px + s, py + s, px, py + s, rr);
+      ctx.arcTo(px, py + s, px, py, rr);
+      ctx.arcTo(px, py, px + s, py, rr);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      ctx.strokeStyle = c.bg;
+      ctx.lineWidth = Math.max(1.2, cell * 0.045);
+      ctx.globalAlpha = 0.5;
+      ctx.beginPath();
+      ctx.moveTo(px + s * 0.18, py + s * 0.5);
+      ctx.lineTo(px + s * 0.82, py + s * 0.5);
+      ctx.moveTo(px + s * 0.5, py + s * 0.18);
+      ctx.lineTo(px + s * 0.5, py + s * 0.82);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    });
+
+    const px = ox + g.player.x * cell + cell / 2;
+    const py = oy + g.player.y * cell + cell / 2;
+    ctx.fillStyle = c.text;
+    ctx.shadowColor = c.accent;
+    ctx.shadowBlur = c.light ? 0 : 16;
+    ctx.beginPath();
+    ctx.arc(px, py, cell * 0.28, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = c.bg;
+    ctx.beginPath();
+    ctx.arc(px, py - cell * 0.06, cell * 0.1, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
+  CG.loop(() => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildLevel(g.level);
+    }
+    draw();
+  });
+
+  /* -------------------------------------------------- 输入 */
+
+  document.addEventListener('keydown', (e) => {
+    const k = e.key;
+    if (k === 'ArrowUp' || k === 'w' || k === 'W') { move(0, -1); e.preventDefault(); }
+    else if (k === 'ArrowDown' || k === 's' || k === 'S') { move(0, 1); e.preventDefault(); }
+    else if (k === 'ArrowLeft' || k === 'a' || k === 'A') { move(-1, 0); e.preventDefault(); }
+    else if (k === 'ArrowRight' || k === 'd' || k === 'D') { move(1, 0); e.preventDefault(); }
+    else if (k === 'z' || k === 'Z') undo();
+    else if (k === 'r' || k === 'R') { if (!busy) buildLevel(g.level, 17); }
+  });
+
+  CG.util.swiper(canvas, (dir) => {
+    if (dir === 'up') move(0, -1);
+    if (dir === 'down') move(0, 1);
+    if (dir === 'left') move(-1, 0);
+    if (dir === 'right') move(1, 0);
+  });
+
+  $('btnUndo').addEventListener('click', undo);
+  $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level, 17); });
+  $('btnSkip').addEventListener('click', () => { if (!busy) buildLevel(g.level, 29); });
+})();
+</script>
+</body>
+</html>

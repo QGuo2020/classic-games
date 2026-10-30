@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>2048 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">2048<small>2048</small></div>
+  <div class="hud">
+    <span class="stat">关卡<b id="hudLevel">1</b></span>
+    <span class="stat">目标<b id="hudTarget">128</b></span>
+    <span class="stat">剩余步<b id="hudMoves">110</b></span>
+    <span class="stat">分数<b id="hudScore">0</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <span class="spacer"></span>
+  <span class="note">方向键 / WASD / 滑动屏幕</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const $ = (id) => document.getElementById(id);
+  const hud = { level: $('hudLevel'), target: $('hudTarget'), moves: $('hudMoves'), score: $('hudScore') };
+
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  const N = 4;
+  let W = 0, H = 0, ctx = null;
+  let busy = false;
+
+  const g = {
+    level: 1,
+    target: 128,
+    maxMoves: 110,
+    moves: 0,
+    score: 0,
+    board: [],
+    won: false,
+    over: false,
+    pop: new Map()
+  };
+
+  const prog = CG.progress('2048');
+  g.level = Math.max(1, prog.level);
+
+  function levelConf(n) {
+    return {
+      target: Math.min(65536, Math.pow(2, 6 + n)),
+      maxMoves: 90 + n * 25
+    };
+  }
+
+  function syncHud() {
+    hud.level.textContent = g.level;
+    hud.target.textContent = g.target;
+    hud.moves.textContent = Math.max(0, g.maxMoves - g.moves);
+    hud.score.textContent = g.score;
+  }
+
+  function emptyCells() {
+    const out = [];
+    for (let i = 0; i < N * N; i++) if (!g.board[i]) out.push(i);
+    return out;
+  }
+
+  function spawn() {
+    const free = emptyCells();
+    if (!free.length) return;
+    const i = free[Math.floor(Math.random() * free.length)];
+    g.board[i] = Math.random() < 0.9 ? 2 : 4;
+    g.pop.set(i, 0);
+  }
+
+  function buildLevel(n) {
+    const c = levelConf(n);
+    g.level = n;
+    g.target = c.target;
+    g.maxMoves = c.maxMoves;
+    g.moves = 0;
+    g.score = 0;
+    g.won = false;
+    g.over = false;
+    g.board = new Array(N * N).fill(0);
+    g.pop.clear();
+    spawn();
+    spawn();
+    syncHud();
+  }
+
+  function slide(dir) {
+    let moved = false, gained = 0;
+    const merged = new Set();
+
+    for (let i = 0; i < N; i++) {
+      const line = [];
+      for (let j = 0; j < N; j++) {
+        let x, y;
+        if (dir === 'left') { x = j; y = i; }
+        else if (dir === 'right') { x = N - 1 - j; y = i; }
+        else if (dir === 'up') { x = i; y = j; }
+        else { x = i; y = N - 1 - j; }
+        line.push({ x, y, v: g.board[y * N + x] });
+      }
+
+      const vals = line.map((c) => c.v).filter((v) => v);
+      const out = [];
+      for (let k = 0; k < vals.length; k++) {
+        if (k + 1 < vals.length && vals[k] === vals[k + 1]) {
+          out.push(vals[k] * 2);
+          gained += vals[k] * 2;
+          k++;
+        } else {
+          out.push(vals[k]);
+        }
+      }
+      while (out.length < N) out.push(0);
+
+      line.forEach((c, k) => {
+        const idx = c.y * N + c.x;
+        if (g.board[idx] !== out[k]) moved = true;
+        if (g.board[idx] !== out[k] && out[k]) merged.add(idx);
+        g.board[idx] = out[k];
+      });
+    }
+
+    return { moved, gained, merged };
+  }
+
+  function hasMoves() {
+    if (emptyCells().length) return true;
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const v = g.board[y * N + x];
+        if (x + 1 < N && g.board[y * N + x + 1] === v) return true;
+        if (y + 1 < N && g.board[(y + 1) * N + x] === v) return true;
+      }
+    }
+    return false;
+  }
+
+  function move(dir) {
+    if (busy || g.over || g.won) return;
+    const res = slide(dir);
+    if (!res.moved) return;
+
+    g.moves += 1;
+    g.score += res.gained;
+    res.merged.forEach((i) => g.pop.set(i, 0));
+    spawn();
+    CG.sfx.move();
+    if (res.gained) CG.sfx.ok();
+
+    syncHud();
+    checkState();
+  }
+
+  function checkState() {
+    if (g.board.some((v) => v >= g.target)) { winLevel(); return; }
+    if (g.moves >= g.maxMoves) { loseLevel('步数用尽'); return; }
+    if (!hasMoves()) { loseLevel('没有可走的步了'); return; }
+  }
+
+  async function winLevel() {
+    if (busy) return;
+    busy = true;
+    g.won = true;
+    CG.sfx.win();
+    const n = g.level;
+    prog.reach(n + 1);
+    prog.win(g.score);
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 关 · 达成 ' + g.target,
+      text: '用了 <b>' + g.moves + '</b> 步，得分 <b>' + g.score + '</b><br>下一关目标翻倍：' + Math.min(65536, g.target * 2),
+      actions: [
+        { label: '下一关', value: 'next', primary: true },
+        { label: '重玩本关', value: 'again' }
+      ]
+    });
+    busy = false;
+    if (r === 'next') buildLevel(n + 1);
+    else buildLevel(n);
+  }
+
+  async function loseLevel(reason) {
+    if (busy) return;
+    busy = true;
+    g.over = true;
+    CG.sfx.lose();
+    const r = await CG.ui.modal({
+      title: '这一关没过',
+      text: reason + '<br>目标 ' + g.target + '，最高方块 ' + Math.max.apply(null, g.board),
+      actions: [
+        { label: '重试本关', value: 'retry', primary: true },
+        { label: '从第 1 关开始', value: 'reset' }
+      ]
+    });
+    busy = false;
+    if (r === 'reset') { prog.reset(); buildLevel(1); }
+    else buildLevel(g.level);
+  }
+
+  /* -------------------------------------------------- 绘制 */
+
+  function tileColors(v) {
+    const c = CG.colors();
+    if (v <= 4) return { bg: c.light ? 'rgba(45,72,100,0.09)' : 'rgba(164,190,225,0.14)', fg: c.text };
+    if (v <= 16) return { bg: c.accent, fg: c.light ? '#f2fffb' : '#04120f' };
+    if (v <= 64) return { bg: c.violet, fg: c.light ? '#ffffff' : '#0b0614' };
+    if (v <= 512) return { bg: c.hint, fg: '#241a00' };
+    return { bg: c.danger, fg: '#2a0009' };
+  }
+
+  function roundRect(x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.arcTo(x + w, y, x + w, y + h, r);
+    ctx.arcTo(x + w, y + h, x, y + h, r);
+    ctx.arcTo(x, y + h, x, y, r);
+    ctx.arcTo(x, y, x + w, y, r);
+    ctx.closePath();
+  }
+
+  function draw() {
+    const c = CG.colors();
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const size = Math.min(W - 40, H - 40);
+    const ox = (W - size) / 2;
+    const oy = (H - size) / 2;
+    const pad = size * 0.03;
+    const cell = (size - pad * (N + 1)) / N;
+
+    ctx.fillStyle = c.light ? 'rgba(45,72,100,0.06)' : 'rgba(164,190,225,0.05)';
+    const rr = size * 0.03;
+    ctx.beginPath();
+    ctx.moveTo(ox + rr, oy);
+    ctx.arcTo(ox + size, oy, ox + size, oy + size, rr);
+    ctx.arcTo(ox + size, oy + size, ox, oy + size, rr);
+    ctx.arcTo(ox, oy + size, ox, oy, rr);
+    ctx.arcTo(ox, oy, ox + size, oy, rr);
+    ctx.closePath();
+    ctx.fill();
+
+    for (let i = 0; i < N * N; i++) {
+      const x = i % N, y = Math.floor(i / N);
+      const px = ox + pad + x * (cell + pad);
+      const py = oy + pad + y * (cell + pad);
+      const v = g.board[i];
+
+      let scale = 1;
+      if (g.pop.has(i)) {
+        const t = Math.min(1, g.pop.get(i) + 0.09);
+        if (t >= 1) g.pop.delete(i); else g.pop.set(i, t);
+        scale = 0.86 + 0.14 * t;
+      }
+
+      if (!v) {
+        ctx.fillStyle = c.light ? 'rgba(45,72,100,0.05)' : 'rgba(164,190,225,0.05)';
+        roundRect(px, py, cell, cell, cell * 0.12);
+        ctx.fill();
+        continue;
+      }
+
+      const col = tileColors(v);
+      const s = cell * scale;
+      const dx = px + (cell - s) / 2;
+      const dy = py + (cell - s) / 2;
+
+      ctx.fillStyle = col.bg;
+      ctx.shadowColor = col.bg;
+      ctx.shadowBlur = c.light ? 0 : 12;
+      roundRect(dx, dy, s, s, s * 0.12);
+      ctx.fill();
+      ctx.shadowBlur = 0;
+
+      const text = String(v);
+      const fs = s * (text.length >= 4 ? 0.28 : text.length === 3 ? 0.34 : 0.42);
+      ctx.fillStyle = col.fg;
+      ctx.font = '600 ' + Math.round(fs) + 'px ' + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, dx + s / 2, dy + s / 2 + 1);
+    }
+  }
+
+  CG.loop(() => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildLevel(g.level);
+    }
+    draw();
+  });
+
+  /* -------------------------------------------------- 输入 */
+
+  document.addEventListener('keydown', (e) => {
+    const k = e.key;
+    if (k === 'ArrowLeft' || k === 'a' || k === 'A') { move('left'); e.preventDefault(); }
+    else if (k === 'ArrowRight' || k === 'd' || k === 'D') { move('right'); e.preventDefault(); }
+    else if (k === 'ArrowUp' || k === 'w' || k === 'W') { move('up'); e.preventDefault(); }
+    else if (k === 'ArrowDown' || k === 's' || k === 'S') { move('down'); e.preventDefault(); }
+    else if (k === 'r' || k === 'R') { if (!busy) buildLevel(g.level); }
+  });
+
+  CG.util.swiper(canvas, (dir) => move(dir), 22);
+
+  $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
+})();
+</script>
+</body>
+</html>

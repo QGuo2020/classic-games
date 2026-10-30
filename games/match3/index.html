@@ -1,0 +1,405 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>三消 · 经典小游戏</title>
+<link rel="stylesheet" href="../../assets/css/theme.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%23050912'/%3E%3Cpath d='M16 6l10 20H6z' fill='none' stroke='%235df2d0' stroke-width='2.5'/%3E%3C/svg%3E">
+</head>
+<body class="game-page">
+
+<header class="topbar">
+  <a class="back" href="../../index.html">← 大厅</a>
+  <div class="game-title">三消<small>Match 3</small></div>
+  <div class="hud">
+    <span class="stat">关卡<b id="hudLevel">1</b></span>
+    <span class="stat">分数<b id="hudScore">0</b></span>
+    <span class="stat">目标<b id="hudTarget">800</b></span>
+    <span class="stat">步数<b id="hudMoves">20</b></span>
+  </div>
+  <div class="actions">
+    <button class="icon-btn" id="btnSound" title="音效">🔊</button>
+    <button class="icon-btn" id="btnTheme" title="主题">☾</button>
+  </div>
+</header>
+
+<main class="stage-wrap" id="stage">
+  <canvas id="c"></canvas>
+  <div id="overlay"></div>
+</main>
+
+<footer class="toolbar">
+  <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
+  <span class="spacer"></span>
+  <span class="note">交换相邻的两个方块，凑成三连即可消除</span>
+</footer>
+
+<script src="../../assets/js/core.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('c');
+  const $ = (id) => document.getElementById(id);
+  const hud = { level: $('hudLevel'), score: $('hudScore'), target: $('hudTarget'), moves: $('hudMoves') };
+
+  CG.theme.bind($('btnTheme'));
+  CG.soundButton($('btnSound'));
+
+  const N = 8;
+  const COLORS = ['#5df2d0', '#a78bfa', '#ffd166', '#ff5d78', '#6ea8ff'];
+
+  let W = 0, H = 0, ctx = null;
+  let busy = false;
+
+  const g = {
+    level: 1,
+    target: 800,
+    movesLeft: 20,
+    maxMoves: 20,
+    score: 0,
+    board: new Array(N * N).fill(0),
+    anim: new Float32Array(N * N),
+    sel: -1,
+    over: false,
+    won: false,
+    flash: 0
+  };
+
+  const prog = CG.progress('match3');
+  g.level = Math.max(1, prog.level);
+
+  const idx = (x, y) => y * N + x;
+  const randColor = () => Math.floor(Math.random() * COLORS.length);
+
+  function syncHud() {
+    hud.level.textContent = g.level;
+    hud.score.textContent = g.score;
+    hud.target.textContent = g.target;
+    hud.moves.textContent = g.movesLeft;
+    hud.moves.className = g.movesLeft <= 3 ? 'danger' : '';
+  }
+
+  function findMatches(board) {
+    const hit = new Set();
+    for (let y = 0; y < N; y++) {
+      let run = 1;
+      for (let x = 1; x <= N; x++) {
+        const same = x < N && board[idx(x, y)] === board[idx(x - 1, y)] && board[idx(x, y)] >= 0;
+        if (same) run++;
+        else {
+          if (run >= 3) for (let k = x - run; k < x; k++) hit.add(idx(k, y));
+          run = 1;
+        }
+      }
+    }
+    for (let x = 0; x < N; x++) {
+      let run = 1;
+      for (let y = 1; y <= N; y++) {
+        const same = y < N && board[idx(x, y)] === board[idx(x, y - 1)] && board[idx(x, y)] >= 0;
+        if (same) run++;
+        else {
+          if (run >= 3) for (let k = y - run; k < y; k++) hit.add(idx(x, k));
+          run = 1;
+        }
+      }
+    }
+    return hit;
+  }
+
+  function collapse(board) {
+    const fresh = [];
+    for (let x = 0; x < N; x++) {
+      let write = N - 1;
+      for (let y = N - 1; y >= 0; y--) {
+        const v = board[idx(x, y)];
+        if (v >= 0) {
+          board[idx(x, write)] = v;
+          write--;
+        }
+      }
+      for (let y = write; y >= 0; y--) {
+        board[idx(x, y)] = randColor();
+        fresh.push(idx(x, y));
+      }
+    }
+    return fresh;
+  }
+
+  function resolve(board) {
+    let combo = 0;
+    let total = 0;
+    while (true) {
+      const hits = findMatches(board);
+      if (!hits.size) break;
+      combo++;
+      total += hits.size * 10 * combo;
+      hits.forEach((i) => { board[i] = -1; });
+      const fresh = collapse(board);
+      fresh.forEach((i) => { g.anim[i] = 0; });
+    }
+    return { total, combo };
+  }
+
+  function swapValues(board, a, b) {
+    const t = board[a];
+    board[a] = board[b];
+    board[b] = t;
+  }
+
+  function anyMoveExists(board) {
+    for (let y = 0; y < N; y++) {
+      for (let x = 0; x < N; x++) {
+        const i = idx(x, y);
+        if (x + 1 < N) {
+          const j = idx(x + 1, y);
+          swapValues(board, i, j);
+          const ok = findMatches(board).size > 0;
+          swapValues(board, i, j);
+          if (ok) return true;
+        }
+        if (y + 1 < N) {
+          const j = idx(x, y + 1);
+          swapValues(board, i, j);
+          const ok = findMatches(board).size > 0;
+          swapValues(board, i, j);
+          if (ok) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  function fillBoard() {
+    let guard = 0;
+    do {
+      for (let i = 0; i < N * N; i++) g.board[i] = randColor();
+      let clean = 0;
+      while (findMatches(g.board).size && clean++ < 60) {
+        const hits = findMatches(g.board);
+        hits.forEach((i) => { g.board[i] = randColor(); });
+      }
+    } while (!anyMoveExists(g.board) && guard++ < 30);
+  }
+
+  function buildLevel(n) {
+    g.level = n;
+    g.target = 700 + n * 350;
+    g.maxMoves = 20 + Math.min(8, n);
+    g.movesLeft = g.maxMoves;
+    g.score = 0;
+    g.over = false;
+    g.won = false;
+    g.sel = -1;
+    fillBoard();
+    g.anim.fill(1);
+    syncHud();
+  }
+
+  function trySwap(a, b) {
+    if (busy || g.over || g.won) return;
+    const dx = Math.abs((a % N) - (b % N));
+    const dy = Math.abs(Math.floor(a / N) - Math.floor(b / N));
+    if (dx + dy !== 1) return;
+
+    swapValues(g.board, a, b);
+    if (!findMatches(g.board).size) {
+      swapValues(g.board, a, b);
+      CG.sfx.bad();
+      return;
+    }
+
+    g.movesLeft -= 1;
+    const res = resolve(g.board);
+    g.score += res.total;
+    g.flash = 0.25;
+    if (res.combo >= 2) CG.sfx.ok(); else CG.sfx.hit();
+
+    if (!anyMoveExists(g.board)) {
+      fillBoard();
+      g.anim.fill(0);
+      CG.ui.toast('没有可消除的组合，盘面已重排');
+    }
+
+    syncHud();
+    checkState();
+  }
+
+  function checkState() {
+    if (g.score >= g.target) { winLevel(); return; }
+    if (g.movesLeft <= 0) { loseLevel(); return; }
+  }
+
+  async function winLevel() {
+    if (busy) return;
+    busy = true;
+    g.won = true;
+    CG.sfx.win();
+    const n = g.level;
+    prog.reach(n + 1);
+    prog.win(g.score);
+    const r = await CG.ui.modal({
+      title: '第 ' + n + ' 关 · 达标',
+      text: '得分 <b>' + g.score + '</b> / 目标 ' + g.target + '<br>下一关目标更高、步数更多。',
+      actions: [
+        { label: '下一关', value: 'next', primary: true },
+        { label: '重玩本关', value: 'again' }
+      ]
+    });
+    busy = false;
+    buildLevel(r === 'next' ? n + 1 : n);
+  }
+
+  async function loseLevel() {
+    if (busy) return;
+    busy = true;
+    g.over = true;
+    CG.sfx.lose();
+    const r = await CG.ui.modal({
+      title: '步数用完了',
+      text: '得分 <b>' + g.score + '</b> / 目标 ' + g.target,
+      actions: [
+        { label: '重试本关', value: 'retry', primary: true },
+        { label: '从第 1 关开始', value: 'reset' }
+      ]
+    });
+    busy = false;
+    if (r === 'reset') { prog.reset(); buildLevel(1); }
+    else buildLevel(g.level);
+  }
+
+  /* -------------------------------------------------- 绘制 */
+
+  function draw(dt) {
+    const c = CG.colors();
+    ctx.fillStyle = c.bg;
+    ctx.fillRect(0, 0, W, H);
+
+    const size = Math.min(W - 30, H - 30);
+    const ox = (W - size) / 2;
+    const oy = (H - size) / 2;
+    const pad = size * 0.018;
+    const cell = (size - pad * (N + 1)) / N;
+
+    ctx.fillStyle = c.light ? 'rgba(45,72,100,0.06)' : 'rgba(164,190,225,0.05)';
+    const rr = size * 0.035;
+    ctx.beginPath();
+    ctx.moveTo(ox + rr, oy);
+    ctx.arcTo(ox + size, oy, ox + size, oy + size, rr);
+    ctx.arcTo(ox + size, oy + size, ox, oy + size, rr);
+    ctx.arcTo(ox, oy + size, ox, oy, rr);
+    ctx.arcTo(ox, oy, ox + size, oy, rr);
+    ctx.closePath();
+    ctx.fill();
+
+    for (let i = 0; i < N * N; i++) {
+      const x = i % N, y = Math.floor(i / N);
+      const px = ox + pad + x * (cell + pad);
+      const py = oy + pad + y * (cell + pad);
+
+      if (g.anim[i] < 1) g.anim[i] = Math.min(1, g.anim[i] + dt * 5);
+      const grow = 0.75 + 0.25 * g.anim[i];
+
+      const v = g.board[i];
+      const color = COLORS[v % COLORS.length];
+      const s = cell * grow;
+      const dx = px + (cell - s) / 2;
+      const dy = py + (cell - s) / 2;
+
+      ctx.fillStyle = color;
+      ctx.globalAlpha = g.anim[i] < 1 ? 0.55 + 0.45 * g.anim[i] : 1;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = c.light ? 0 : 10;
+      const rad = s * 0.26;
+      ctx.beginPath();
+      ctx.moveTo(dx + rad, dy);
+      ctx.arcTo(dx + s, dy, dx + s, dy + s, rad);
+      ctx.arcTo(dx + s, dy + s, dx, dy + s, rad);
+      ctx.arcTo(dx, dy + s, dx, dy, rad);
+      ctx.arcTo(dx, dy, dx + s, dy, rad);
+      ctx.closePath();
+      ctx.fill();
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+
+      ctx.fillStyle = 'rgba(255,255,255,0.18)';
+      ctx.beginPath();
+      ctx.ellipse(dx + s * 0.32, dy + s * 0.3, s * 0.18, s * 0.12, -0.5, 0, Math.PI * 2);
+      ctx.fill();
+
+      if (i === g.sel) {
+        ctx.strokeStyle = c.text;
+        ctx.lineWidth = Math.max(2, cell * 0.06);
+        ctx.beginPath();
+        ctx.moveTo(dx + rad, dy);
+        ctx.arcTo(dx + s, dy, dx + s, dy + s, rad);
+        ctx.arcTo(dx + s, dy + s, dx, dy + s, rad);
+        ctx.arcTo(dx, dy + s, dx, dy, rad);
+        ctx.arcTo(dx, dy, dx + s, dy, rad);
+        ctx.closePath();
+        ctx.stroke();
+      }
+    }
+
+    if (g.flash > 0) {
+      g.flash = Math.max(0, g.flash - dt);
+      ctx.fillStyle = 'rgba(93,242,208,' + (g.flash * 0.2) + ')';
+      ctx.fillRect(ox, oy, size, size);
+    }
+  }
+
+  CG.loop((dt) => {
+    const fit = CG.util.fit(canvas);
+    ctx = fit.ctx;
+    if (fit.w !== W || fit.h !== H) {
+      const first = W === 0;
+      W = fit.w; H = fit.h;
+      if (first) buildLevel(g.level);
+    }
+    draw(dt);
+  });
+
+  /* -------------------------------------------------- 输入 */
+
+  function cellAt(e) {
+    const size = Math.min(W - 30, H - 30);
+    const ox = (W - size) / 2;
+    const oy = (H - size) / 2;
+    const pad = size * 0.018;
+    const cell = (size - pad * (N + 1)) / N;
+    const r = canvas.getBoundingClientRect();
+    const x = Math.floor((e.clientX - r.left - ox - pad) / (cell + pad));
+    const y = Math.floor((e.clientY - r.top - oy - pad) / (cell + pad));
+    if (x < 0 || y < 0 || x >= N || y >= N) return -1;
+    return idx(x, y);
+  }
+
+  canvas.addEventListener('pointerdown', (e) => {
+    if (busy || g.over || g.won) return;
+    const i = cellAt(e);
+    if (i < 0) return;
+    if (g.sel < 0) {
+      g.sel = i;
+      CG.sfx.click();
+      return;
+    }
+    if (g.sel === i) {
+      g.sel = -1;
+      return;
+    }
+    const a = g.sel;
+    g.sel = -1;
+    trySwap(a, i);
+  });
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'r' || e.key === 'R') { if (!busy) buildLevel(g.level); }
+  });
+
+  $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level); });
+  window.__match3 = g;
+})();
+</script>
+</body>
+</html>
