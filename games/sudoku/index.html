@@ -61,6 +61,7 @@
   <button class="btn" id="btnNotes">笔记 <kbd>N</kbd></button>
   <button class="btn" id="btnUndo">撤销 <kbd>Z</kbd></button>
   <button class="btn" id="btnHint">提示 <kbd>H</kbd></button>
+  <button class="btn" id="btnTools">工具 <kbd>T</kbd></button>
   <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
   <span class="spacer"></span>
   <span class="note">点格子后按 1-9，或点下方数字</span>
@@ -246,8 +247,12 @@
     g.elapsed = 0;
     g.history = [];
     g.solved = false;
+    g.revealed = false;
+    g.checkUntil = 0;
+    g.warnedFull = false;
 
     $('btnNotes').classList.remove('primary');
+    $('btnNotes').innerHTML = '笔记 <kbd>N</kbd>';
     syncHud();
     syncPad();
   }
@@ -329,7 +334,7 @@
     g.value[i] = g.value[i] === d ? 0 : d;
     g.notes[i].clear();
 
-    if (g.value[i] && isWrong(i)) {
+    if (g.value[i] && conflictsAt(i)) {
       g.mistakes += 1;
       CG.sfx.bad();
       if (navigator.vibrate) navigator.vibrate(20);
@@ -399,12 +404,12 @@
       if (g.value[i] !== g.solution[i]) wrong++;
     }
 
-    // 填满了但不对：把错的标出来，别让人对着满盘干瞪眼
+    // 填满了但不对：把错的格子闪红，别让人对着满盘干瞪眼
     if (filled === 81 && wrong > 0) {
-      g.wrongFlashUntil = performance.now() + 2600;
+      g.checkUntil = performance.now() + 3000;
       if (!g.warnedFull) {
         g.warnedFull = true;
-        CG.ui.toast('有 ' + wrong + ' 格填错了，红色格子需要改');
+        CG.ui.toast('有 ' + wrong + ' 格不对（闪红的格子），改掉就能过关');
         CG.sfx.bad();
       }
       return;
@@ -527,8 +532,9 @@
       const cy = oy + y * cell + cell / 2 + 1;
 
       if (g.value[i]) {
-        const bad = isWrong(i);
-        const pulsing = bad && performance.now() < (g.wrongFlashUntil || 0);
+        const checking = performance.now() < (g.checkUntil || 0);
+        const bad = !g.given[i] && (conflictsAt(i) || (checking && g.value[i] !== g.solution[i]));
+        const pulsing = checking && bad;
         ctx.globalAlpha = pulsing ? 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 180)) : 1;
         ctx.fillStyle = g.given[i] ? c.text : bad ? c.danger : c.accent;
         ctx.font = (g.given[i] ? '600 ' : bad ? '700 ' : '500 ') + Math.round(cell * 0.5) + 'px ' + getComputedStyle(document.body).fontFamily;
@@ -612,6 +618,7 @@
     if (k === 'n' || k === 'N') toggleNotes();
     if (k === 'z' || k === 'Z') undo();
     if (k === 'h' || k === 'H') useHint();
+    if (k === 't' || k === 'T') openTools();
     if (k === 'r' || k === 'R') { if (!busy) buildLevel(g.level, 5); }
   });
 
@@ -639,7 +646,102 @@
   $('btnNotes').addEventListener('click', toggleNotes);
   $('btnUndo').addEventListener('click', undo);
   $('btnHint').addEventListener('click', useHint);
+  $('btnTools').addEventListener('click', openTools);
   $('btnRestart').addEventListener('click', () => { if (!busy) buildLevel(g.level, 5); });
+
+  /* -------------------------------------------------- 辅助工具 */
+
+  function candidateOk(i, v) {
+    const x = i % 9, y = (i / 9) | 0, b = boxOf(x, y);
+    for (let k = 0; k < 81; k++) {
+      if (k === i || g.value[k] !== v) continue;
+      const x2 = k % 9, y2 = (k / 9) | 0;
+      if (y2 === y || x2 === x || boxOf(x2, y2) === b) return false;
+    }
+    return true;
+  }
+
+  /** 把每格的候选数自动写进笔记 */
+  function autoNotes() {
+    if (busy || g.solved) return;
+    for (let i = 0; i < 81; i++) {
+      g.notes[i].clear();
+      if (g.value[i]) continue;
+      for (let v = 1; v <= 9; v++) if (candidateOk(i, v)) g.notes[i].add(v);
+    }
+    CG.sfx.ok();
+    CG.ui.toast('已把候选数写进笔记');
+  }
+
+  /** 检查当前填写：错的格子闪红 2.6 秒 */
+  function checkBoard() {
+    let wrong = 0;
+    for (let i = 0; i < 81; i++) {
+      if (g.value[i] && !g.given[i] && g.value[i] !== g.solution[i]) wrong++;
+    }
+    if (!wrong) {
+      CG.ui.toast('目前填的数字都对');
+      CG.sfx.ok();
+      return;
+    }
+    g.checkUntil = performance.now() + 2600;
+    CG.sfx.bad();
+    CG.ui.toast('有 ' + wrong + ' 格不对（红色闪一下）');
+  }
+
+  /** 看完整答案：会结束本关，但不计入进度 */
+  async function revealAnswer() {
+    if (busy || g.solved) return;
+    const confirm = await CG.ui.modal({
+      title: '显示完整答案？',
+      text: '看过答案这一关就不算通过了。',
+      actions: [
+        { label: '显示答案', value: 'yes', primary: true },
+        { label: '再想想', value: 'no' }
+      ]
+    });
+    if (confirm !== 'yes') return;
+
+    for (let i = 0; i < 81; i++) {
+      g.value[i] = g.solution[i];
+      g.notes[i].clear();
+    }
+    g.solved = true;
+    g.revealed = true;
+    g.checkUntil = 0;
+    syncPad();
+    const r = await CG.ui.modal({
+      title: '这是完整答案',
+      text: '绿色数字就是答案。<br>这一关不计入进度。',
+      actions: [
+        { label: '重玩本关', value: 'again', primary: true },
+        { label: '下一关', value: 'next' }
+      ]
+    });
+    busy = false;
+    if (r === 'next') buildLevel(g.level + 1);
+    else buildLevel(g.level);
+  }
+
+  async function openTools() {
+    if (busy) return;
+    busy = true;
+    const r = await CG.ui.modal({
+      title: '工具',
+      text: '卡住的时候用这些',
+      actions: [
+        { label: '检查错误', value: 'check' },
+        { label: '自动笔记', value: 'notes' },
+        { label: '看答案', value: 'answer' },
+        { label: '关闭', value: 'close', primary: true }
+      ]
+    });
+    busy = false;
+
+    if (r === 'check') checkBoard();
+    else if (r === 'notes') autoNotes();
+    else if (r === 'answer') revealAnswer();
+  }
 
   // 调试钩子：给自动化测试用
   g.debugSolve = function () {

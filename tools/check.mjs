@@ -703,6 +703,73 @@ async function main() {
       const n = countSolutions(puz, 2);
       check(`sudoku 第 ${lv} 关题面可解且唯一`, okSubset && n === 1, `solutions=${n}`);
     }
+
+    // 工具面板
+    await evaluate("document.getElementById('btnTools').click()");
+    await sleep(300);
+    const toolBtns = await evaluate("document.querySelectorAll('#overlay.show .modal-actions .btn').length");
+    check('sudoku 工具面板能打开', toolBtns >= 4, 'buttons=' + toolBtns);
+
+    await evaluate(`(() => {
+      const b = [...document.querySelectorAll('#overlay.show .modal-actions .btn')].find((x) => x.textContent.includes('自动笔记'));
+      if (b) b.click();
+    })()`);
+    await sleep(250);
+    const noteCells = await evaluate('window.__game.notes.filter((s) => s.size > 0).length');
+    check('sudoku 自动笔记补出候选数', noteCells > 0, 'cells=' + noteCells);
+
+    // 填一个错的，然后用「检查错误」
+    const wrongSpot = await evaluate(`(() => {
+      const g = window.__game;
+      const c = document.querySelector('canvas');
+      const r = c.getBoundingClientRect();
+      const pad = 18;
+      const cell = Math.floor(Math.min((r.width - pad * 2) / 9, (r.height - pad * 2) / 9));
+      const ox = Math.round((r.width - cell * 9) / 2);
+      const oy = Math.round((r.height - cell * 9) / 2);
+      let target = -1;
+      for (let i = 0; i < 81; i++) if (!g.given[i]) { target = i; break; }
+      return {
+        x: r.left + ox + (target % 9) * cell + cell / 2,
+        y: r.top + oy + ((target / 9) | 0) * cell + cell / 2,
+        target,
+        wrong: (g.solution[target] % 9) + 1
+      };
+    })()`);
+
+    await clickAt(wrongSpot.x, wrongSpot.y);
+    await sleep(80);
+    await pressKey(String(wrongSpot.wrong), 'Digit' + wrongSpot.wrong, 48 + wrongSpot.wrong);
+    await sleep(150);
+    await evaluate("document.getElementById('btnTools').click()");
+    await sleep(300);
+    await evaluate(`(() => {
+      const b = [...document.querySelectorAll('#overlay.show .modal-actions .btn')].find((x) => x.textContent.includes('检查错误'));
+      if (b) b.click();
+    })()`);
+    await sleep(250);
+    const checking = await evaluate('window.__game.checkUntil > performance.now()');
+    check('sudoku 检查错误会标出错格', checking === true);
+
+    // 看答案
+    await evaluate("document.getElementById('btnTools').click()");
+    await sleep(300);
+    await evaluate(`(() => {
+      const b = [...document.querySelectorAll('#overlay.show .modal-actions .btn')].find((x) => x.textContent.includes('看答案'));
+      if (b) b.click();
+    })()`);
+    await sleep(350);
+    const confirmOpen = await evaluate("!!document.querySelector('#overlay.show .btn.primary')");
+    check('sudoku 看答案会先确认', confirmOpen === true);
+    if (confirmOpen) {
+      await evaluate("document.querySelector('#overlay.show .btn.primary').click()");
+      await sleep(500);
+      const revealed = await evaluate(`(() => {
+        const g = window.__game;
+        return { solved: g.solved, allMatch: g.value.every((v, i) => v === g.solution[i]) };
+      })()`);
+      check('sudoku 看答案后整盘显示正确答案', revealed.solved === true && revealed.allMatch === true, JSON.stringify(revealed));
+    }
   }
 
   /* --------------------------------------------------------- 通关验证 */
