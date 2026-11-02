@@ -848,5 +848,15 @@
   window.__game = g;
 })();
 </script>
-</body>
+<script>
+(function () {
+  setTimeout(function () {
+    if (window.__game) return;
+    var d = document.createElement('div');
+    d.style.cssText = 'position:fixed;left:0;right:0;top:0;bottom:0;z-index:99999;display:-webkit-box;display:flex;-webkit-box-align:center;align-items:center;justify-content:center;padding:24px;background:#050912;color:#eef4ff;font:14px/1.8 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;text-align:center';
+    d.innerHTML = '<div>这个浏览器内核太旧，跑不动这个游戏。<br>请换 Chrome / Safari / UC 打开，或者点右上角「···」用系统浏览器打开。</div>';
+    document.body.appendChild(d);
+  }, 2500);
+})();
+</script></body>
 </html>

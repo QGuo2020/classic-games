@@ -14,6 +14,27 @@
   }
   .up-grid .btn b { font-size: 13.5px; }
   .up-grid .btn span { font-size: 12px; color: var(--text-muted); font-weight: 400; }
+
+  .skills {
+    position: absolute; right: 10px; bottom: 10px;
+    display: flex; gap: 8px; z-index: 3;
+  }
+  .skill {
+    width: 58px; height: 58px; border-radius: 16px;
+    border: 1px solid var(--line-bright);
+    background: rgba(12, 20, 34, 0.72);
+    color: var(--text);
+    font-size: 22px; line-height: 1;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    backdrop-filter: blur(6px);
+  }
+  .skill small { font-size: 10px; color: var(--text-muted); letter-spacing: 0.04em; }
+  .skill.ready { border-color: var(--accent); box-shadow: 0 0 14px var(--accent-soft); }
+  .skill.cooling { opacity: 0.55; }
+  @media (max-width: 520px) {
+    .skills { right: 8px; bottom: 8px; gap: 6px; }
+    .skill { width: 50px; height: 50px; font-size: 19px; border-radius: 14px; }
+  }
 </style>
 </head>
 <body class="game-page">
@@ -25,7 +46,7 @@
     <span class="stat">波次<b id="hudWave">1</b></span>
     <span class="stat">基地<b id="hudBase" class="accent">10</b></span>
     <span class="stat">击杀<b id="hudKills">0</b></span>
-    <span class="stat">等级<b id="hudLevel">1</b></span>
+    <span class="stat">伤害<b id="hudDmg">16</b></span>
   </div>
   <div class="actions">
     <button class="icon-btn" id="btnSound" title="音效">🔊</button>
@@ -35,6 +56,10 @@
 
 <main class="stage-wrap" id="stage">
   <canvas id="c"></canvas>
+  <div class="skills" id="skills">
+    <button class="skill ready" id="btnBomb"><span>💣</span><small id="bombLabel">炸弹</small></button>
+    <button class="skill ready" id="btnFreeze"><span>❄️</span><small id="freezeLabel">冰冻</small></button>
+  </div>
   <div id="overlay"></div>
 </main>
 
@@ -42,7 +67,7 @@
   <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
   <button class="btn" id="btnPause">暂停 <kbd>P</kbd></button>
   <span class="spacer"></span>
-  <span class="note">自动瞄准开火 · 拖动画布走位 · 升级时三选一</span>
+  <span class="note">点哪打哪（不点就自动瞄准）· 拖动画布走位</span>
 </footer>
 
 <script src="../../assets/js/core.js"></script>
@@ -54,7 +79,7 @@
   const $ = (id) => document.getElementById(id);
   const hud = {
     wave: $('hudWave'), base: $('hudBase'),
-    kills: $('hudKills'), level: $('hudLevel')
+    kills: $('hudKills'), dmg: $('hudDmg')
   };
 
   CG.theme.bind($('btnTheme'));
@@ -93,18 +118,23 @@
     keys: { left: false, right: false },
     shake: 0,
     flash: 0,
-    muzzle: 0
+    muzzle: 0,
+    aimX: null,
+    aimY: null,
+    floats: [],
+    skillBomb: 0,
+    skillFreeze: 0
   };
 
   const prog = CG.progress('zombies');
 
   const UPGRADES = [
-    { id: 'dmg', name: '火力强化', desc: '子弹伤害 +20%', apply: () => { g.dmg *= 1.2; } },
-    { id: 'rate', name: '快速射击', desc: '射速 +15%', apply: () => { g.rate = Math.max(0.12, g.rate * 0.85); } },
-    { id: 'multi', name: '多重射击', desc: '每次多打一个目标（最多 5 个）', apply: () => { g.multi = Math.min(5, g.multi + 1); }, maxed: () => g.multi >= 5 },
-    { id: 'pierce', name: '穿甲弹', desc: '子弹多穿透 1 个僵尸', apply: () => { g.pierce += 1; } },
+    { id: 'dmg', name: '火力强化', desc: () => '伤害 ' + Math.round(g.dmg) + ' → ' + Math.round(g.dmg * 1.2), apply: () => { g.dmg *= 1.2; } },
+    { id: 'rate', name: '快速射击', desc: () => '射击间隔 ' + g.rate.toFixed(2) + 's → ' + Math.max(0.12, g.rate * 0.85).toFixed(2) + 's', apply: () => { g.rate = Math.max(0.12, g.rate * 0.85); } },
+    { id: 'multi', name: '多重射击', desc: () => '同时攻击 ' + g.multi + ' → ' + Math.min(5, g.multi + 1) + ' 个目标', apply: () => { g.multi = Math.min(5, g.multi + 1); }, maxed: () => g.multi >= 5 },
+    { id: 'pierce', name: '穿甲弹', desc: () => '穿透 ' + g.pierce + ' → ' + (g.pierce + 1) + ' 个僵尸', apply: () => { g.pierce += 1; } },
     { id: 'freeze', name: '冰霜弹', desc: '命中后减速 40%，持续 2 秒', apply: () => { g.freeze = true; }, maxed: () => g.freeze },
-    { id: 'crit', name: '致命一击', desc: '暴击率 +10%（双倍伤害）', apply: () => { g.crit = Math.min(0.7, g.crit + 0.1); }, maxed: () => g.crit >= 0.7 },
+    { id: 'crit', name: '致命一击', desc: () => '暴击率 ' + Math.round(g.crit * 100) + '% → ' + Math.round(Math.min(0.7, g.crit + 0.1) * 100) + '%（双倍伤害）', apply: () => { g.crit = Math.min(0.7, g.crit + 0.1); }, maxed: () => g.crit >= 0.7 },
     { id: 'repair', name: '抢修基地', desc: '基地立刻恢复 2 点', apply: () => { g.base = Math.min(g.baseMax, g.base + 2); } },
     { id: 'speed', name: '高速弹', desc: '子弹飞行速度 +25%', apply: () => { g.bulletSpeed *= 1.25; } }
   ];
@@ -121,7 +151,19 @@
     hud.base.textContent = Math.max(0, g.base);
     hud.base.className = g.base <= 3 ? 'danger' : 'accent';
     hud.kills.textContent = g.kills;
-    hud.level.textContent = g.level;
+    hud.dmg.textContent = Math.round(g.dmg);
+    syncSkills();
+  }
+
+  function syncSkills() {
+    const bomb = $('btnBomb');
+    const freeze = $('btnFreeze');
+    bomb.classList.toggle('cooling', g.skillBomb > 0);
+    bomb.classList.toggle('ready', g.skillBomb <= 0);
+    freeze.classList.toggle('cooling', g.skillFreeze > 0);
+    freeze.classList.toggle('ready', g.skillFreeze <= 0);
+    $('bombLabel').textContent = g.skillBomb > 0 ? Math.ceil(g.skillBomb) + 's' : '炸弹';
+    $('freezeLabel').textContent = g.skillFreeze > 0 ? Math.ceil(g.skillFreeze) + 's' : '冰冻';
   }
 
   function reset() {
@@ -150,6 +192,11 @@
     g.shake = 0;
     g.flash = 0;
     g.muzzle = 0;
+    g.aimX = null;
+    g.aimY = null;
+    g.floats = [];
+    g.skillBomb = 0;
+    g.skillFreeze = 0;
 
     // 开局先给三只，别让画面空着
     for (let i = 0; i < 3; i++) {
@@ -196,6 +243,16 @@
   function damageZombie(z, amount) {
     z.hp -= amount;
     z.hit = 0.12;
+    if (g.floats.length < 40) {
+      g.floats.push({
+        x: z.x + (Math.random() - 0.5) * z.w * 0.6,
+        y: z.y + z.h * 0.15,
+        text: '-' + Math.round(amount),
+        life: 0.7,
+        max: 0.7,
+        big: amount >= g.dmg * 1.9
+      });
+    }
     if (z.hp <= 0) killZombie(z);
   }
 
@@ -259,7 +316,7 @@
       picks.forEach((u) => {
         const b = document.createElement('button');
         b.className = 'btn';
-        b.innerHTML = '<b>' + u.name + '</b><span>' + u.desc + '</span>';
+        b.innerHTML = '<b>' + u.name + '</b><span>' + (typeof u.desc === 'function' ? u.desc() : u.desc) + '</span>';
         b.addEventListener('click', () => {
           host.classList.remove('show');
           host.innerHTML = '';
@@ -281,7 +338,20 @@
 
   function nearestTargets(n) {
     if (!g.zombies.length) return [];
-    const sorted = g.zombies.slice().sort((a, b) => (b.y + b.h) - (a.y + a.h));
+    let sorted;
+
+    if (g.aimX != null) {
+      // 玩家点过屏幕：优先打离点击位置最近的
+      sorted = g.zombies.slice().sort((a, b) => {
+        const da = (a.x - g.aimX) * (a.x - g.aimX) + (a.y + a.h / 2 - g.aimY) * (a.y + a.h / 2 - g.aimY);
+        const db = (b.x - g.aimX) * (b.x - g.aimX) + (b.y + b.h / 2 - g.aimY) * (b.y + b.h / 2 - g.aimY);
+        return da - db;
+      });
+    } else {
+      // 没点过就自动打最靠前（离基地最近）的
+      sorted = g.zombies.slice().sort((a, b) => (b.y + b.h) - (a.y + a.h));
+    }
+
     return sorted.slice(0, n);
   }
 
@@ -375,6 +445,20 @@
     g.shake = Math.max(0, g.shake - dt);
     g.muzzle = Math.max(0, g.muzzle - dt);
     g.flash = Math.max(0, g.flash - dt);
+
+    // 技能冷却
+    if (g.skillBomb > 0) g.skillBomb = Math.max(0, g.skillBomb - dt);
+    if (g.skillFreeze > 0) g.skillFreeze = Math.max(0, g.skillFreeze - dt);
+    g.skillHud = (g.skillHud || 0) + dt;
+    if (g.skillHud > 0.2) { g.skillHud = 0; syncSkills(); }
+
+    // 飘字
+    for (let i = g.floats.length - 1; i >= 0; i--) {
+      const f = g.floats[i];
+      f.y -= 42 * dt;
+      f.life -= dt;
+      if (f.life <= 0) g.floats.splice(i, 1);
+    }
 
     // 英雄走位
     const sp = 320;
@@ -492,88 +576,109 @@
 
   /** 把僵尸画进离屏 canvas（按步态分 8 档），每帧只 drawImage */
   function drawZombieShape(g2, t, w, h, color, swing) {
+    const headR = w * (t === 'tank' ? 0.42 : t === 'runner' ? 0.38 : 0.44);
+    const headY = -h * 0.14;
+    const bodyW = w * (t === 'tank' ? 0.74 : t === 'runner' ? 0.5 : 0.6);
+    const bodyH = h * (t === 'tank' ? 0.3 : 0.26);
+    const bodyTop = headY + headR * 0.62;
+
     // 影子
-    g2.fillStyle = 'rgba(0,0,0,0.26)';
+    g2.fillStyle = 'rgba(0,0,0,0.28)';
     g2.beginPath();
     g2.ellipse(0, h * 0.46, w * 0.4, h * 0.07, 0, 0, Math.PI * 2);
     g2.fill();
 
     g2.shadowColor = color;
-    g2.shadowBlur = 10;
-
-    const bw = w * (t === 'tank' ? 1 : t === 'runner' ? 0.68 : 0.84);
-    const bh = h * (t === 'tank' ? 0.42 : 0.38);
-    const bodyTop = -bh * 0.5;
-    const headR = w * (t === 'tank' ? 0.3 : t === 'runner' ? 0.26 : 0.29);
-    const headY = bodyTop - headR * 0.75;
+    g2.shadowBlur = 11;
 
     // 腿
     g2.fillStyle = color;
-    g2.globalAlpha = 0.72;
-    const legW = w * 0.19;
-    const legTop = bh * 0.42;
-    g2.fillRect(-w * 0.26 + swing * w * 0.06, legTop, legW, h * 0.2);
-    g2.fillRect(w * 0.07 - swing * w * 0.06, legTop, legW, h * 0.2);
+    g2.globalAlpha = 0.92;
+    const legW = w * 0.17;
+    const legH = h * 0.15;
+    const legTop = bodyTop + bodyH * 0.92;
+    g2.fillRect(-w * 0.2 + swing * w * 0.05, legTop, legW, legH);
+    g2.fillRect(w * 0.03 - swing * w * 0.05, legTop, legW, legH);
 
-    // 身体
-    g2.globalAlpha = 0.95;
-    const br = bw * 0.26;
+    // 身体（圆润）
+    g2.globalAlpha = 0.97;
+    const br = bodyW * 0.34;
     g2.beginPath();
-    g2.moveTo(-bw / 2 + br, bodyTop);
-    g2.arcTo(bw / 2, bodyTop, bw / 2, bodyTop + bh, br);
-    g2.arcTo(bw / 2, bodyTop + bh, -bw / 2, bodyTop + bh, br);
-    g2.arcTo(-bw / 2, bodyTop + bh, -bw / 2, bodyTop, br);
-    g2.arcTo(-bw / 2, bodyTop, bw / 2, bodyTop, br);
+    g2.moveTo(-bodyW / 2 + br, bodyTop);
+    g2.arcTo(bodyW / 2, bodyTop, bodyW / 2, bodyTop + bodyH, br);
+    g2.arcTo(bodyW / 2, bodyTop + bodyH, -bodyW / 2, bodyTop + bodyH, br);
+    g2.arcTo(-bodyW / 2, bodyTop + bodyH, -bodyW / 2, bodyTop, br);
+    g2.arcTo(-bodyW / 2, bodyTop, bodyW / 2, bodyTop, br);
     g2.closePath();
     g2.fill();
 
     // 手臂
-    g2.globalAlpha = 0.8;
-    const armW = w * 0.17;
-    const armH = h * (t === 'tank' ? 0.24 : 0.3);
-    const armY = bodyTop + bh * 0.18 - (t === 'runner' ? h * 0.14 : 0);
-    g2.fillRect(-bw / 2 - armW * 0.75, armY + swing * h * 0.02, armW, armH);
-    g2.fillRect(bw / 2 - armW * 0.25, armY - swing * h * 0.02, armW, armH);
+    g2.globalAlpha = 0.88;
+    const armW = w * 0.15;
+    const armH = h * 0.2;
+    const armY = bodyTop + h * 0.01;
+    g2.fillRect(-bodyW / 2 - armW * 0.95, armY + swing * h * 0.02, armW, armH);
+    g2.fillRect(bodyW / 2 - armW * 0.05, armY - swing * h * 0.02, armW, armH);
 
-    // 头
+    // 大头
     g2.globalAlpha = 1;
     g2.beginPath();
     g2.arc(0, headY, headR, 0, Math.PI * 2);
     g2.fill();
     g2.shadowBlur = 0;
 
-    // 眼睛
-    g2.fillStyle = t === 'boss' ? '#ffd166' : 'rgba(5,9,18,0.92)';
-    const er = Math.max(1.6, w * 0.065);
+    // 白眼球 + 瞳孔
+    const eyeR = headR * 0.3;
+    g2.fillStyle = 'rgba(255,255,255,0.94)';
     g2.beginPath();
-    g2.arc(-headR * 0.42, headY - headR * 0.1, er, 0, Math.PI * 2);
-    g2.arc(headR * 0.42, headY - headR * 0.1, er, 0, Math.PI * 2);
+    g2.arc(-headR * 0.36, headY - headR * 0.06, eyeR, 0, Math.PI * 2);
+    g2.arc(headR * 0.36, headY - headR * 0.06, eyeR, 0, Math.PI * 2);
     g2.fill();
 
-    // 嘴
-    g2.fillRect(-headR * 0.4, headY + headR * 0.35, headR * 0.8, Math.max(1.4, h * 0.03));
+    g2.fillStyle = t === 'boss' ? '#ffd166' : 'rgba(5,9,18,0.94)';
+    g2.beginPath();
+    g2.arc(-headR * 0.3, headY - headR * 0.04, eyeR * 0.48, 0, Math.PI * 2);
+    g2.arc(headR * 0.42, headY - headR * 0.04, eyeR * 0.48, 0, Math.PI * 2);
+    g2.fill();
 
+    // 嘴：两颗小牙
+    g2.fillStyle = 'rgba(5,9,18,0.55)';
+    g2.fillRect(-headR * 0.3, headY + headR * 0.34, headR * 0.6, Math.max(1.6, headR * 0.14));
+
+    // 配件
+    if (t === 'runner') {
+      // 头巾
+      g2.fillStyle = 'rgba(5,9,18,0.45)';
+      g2.fillRect(-headR * 0.95, headY - headR * 0.72, headR * 1.9, headR * 0.26);
+    }
     if (t === 'tank') {
+      // 头盔
       g2.fillStyle = 'rgba(5,9,18,0.35)';
-      g2.fillRect(-bw * 0.34, bodyTop + bh * 0.12, bw * 0.68, bh * 0.32);
+      g2.beginPath();
+      g2.arc(0, headY, headR * 1.06, Math.PI * 1.05, Math.PI * 1.95);
+      g2.fill();
+      // 胸甲
+      g2.fillRect(-bodyW * 0.36, bodyTop + bodyH * 0.18, bodyW * 0.72, bodyH * 0.34);
     }
     if (t === 'boss') {
+      // 肩刺
       g2.fillStyle = color;
       for (let i = -1; i <= 1; i += 2) {
         g2.beginPath();
-        g2.moveTo(i * bw * 0.5, bodyTop + h * 0.02);
-        g2.lineTo(i * bw * 0.62, bodyTop - h * 0.14);
-        g2.lineTo(i * bw * 0.38, bodyTop + h * 0.02);
+        g2.moveTo(i * bodyW * 0.5, bodyTop + h * 0.03);
+        g2.lineTo(i * bodyW * 0.66, bodyTop - h * 0.1);
+        g2.lineTo(i * bodyW * 0.36, bodyTop + h * 0.03);
         g2.closePath();
         g2.fill();
       }
+      // 皇冠
       g2.fillStyle = '#ffd166';
       g2.beginPath();
-      g2.moveTo(-headR * 0.7, headY - headR * 0.9);
-      g2.lineTo(-headR * 0.3, headY - headR * 1.6);
-      g2.lineTo(0, headY - headR * 0.95);
-      g2.lineTo(headR * 0.3, headY - headR * 1.6);
-      g2.lineTo(headR * 0.7, headY - headR * 0.9);
+      g2.moveTo(-headR * 0.62, headY - headR * 0.85);
+      g2.lineTo(-headR * 0.4, headY - headR * 1.45);
+      g2.lineTo(0, headY - headR * 0.92);
+      g2.lineTo(headR * 0.4, headY - headR * 1.45);
+      g2.lineTo(headR * 0.62, headY - headR * 0.85);
       g2.closePath();
       g2.fill();
     }
@@ -605,15 +710,18 @@
 
     ctx.drawImage(spr.cv, z.x - w / 2 - spr.g, z.y + h / 2 - spr.g, spr.w, spr.h);
 
-    // 血条
-    if (z.hp < z.maxHp) {
-      const bwid = w * 1.1;
+    // 血条：一直显示，残血变红
+    {
+      const bwid = Math.max(w * 1.15, 22);
       const bxx = z.x - bwid / 2;
-      const byy = z.y - 8;
+      const byy = z.y - 9;
+      const ratio = Math.max(0, z.hp / z.maxHp);
+      ctx.globalAlpha = ratio < 1 ? 0.95 : 0.4;
       ctx.fillStyle = c.line;
-      ctx.fillRect(bxx, byy, bwid, 3);
-      ctx.fillStyle = t === 'boss' ? c.danger : c.hint;
-      ctx.fillRect(bxx, byy, bwid * Math.max(0, z.hp / z.maxHp), 3);
+      ctx.fillRect(bxx, byy, bwid, 3.5);
+      ctx.fillStyle = ratio < 0.35 ? c.danger : t === 'boss' ? c.danger : c.hint;
+      ctx.fillRect(bxx, byy, bwid * ratio, 3.5);
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -689,6 +797,39 @@
       ctx.fillRect(p.x - 2, p.y - 2, 4, 4);
     });
     ctx.globalAlpha = 1;
+
+    // 伤害飘字
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    g.floats.forEach((f) => {
+      ctx.globalAlpha = Math.max(0, f.life / f.max);
+      ctx.fillStyle = f.big ? c.hint : c.text;
+      ctx.font = (f.big ? '700 ' : '600 ') + Math.round(f.big ? 17 : 13) + 'px ' + getComputedStyle(document.body).fontFamily;
+      ctx.fillText(f.text, f.x, f.y);
+    });
+    ctx.globalAlpha = 1;
+
+    // 瞄准点
+    if (g.aimX != null) {
+      const pulse = 8 + 3 * Math.sin(performance.now() / 160);
+      ctx.strokeStyle = c.accent;
+      ctx.globalAlpha = 0.75;
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(g.aimX, g.aimY, pulse, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.moveTo(g.aimX - pulse - 5, g.aimY);
+      ctx.lineTo(g.aimX - pulse + 2, g.aimY);
+      ctx.moveTo(g.aimX + pulse - 2, g.aimY);
+      ctx.lineTo(g.aimX + pulse + 5, g.aimY);
+      ctx.moveTo(g.aimX, g.aimY - pulse - 5);
+      ctx.lineTo(g.aimX, g.aimY - pulse + 2);
+      ctx.moveTo(g.aimX, g.aimY + pulse - 2);
+      ctx.lineTo(g.aimX, g.aimY + pulse + 5);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
 
     // 英雄
     const hx = g.hero.x, hy = g.hero.y;
@@ -768,13 +909,48 @@
 
   canvas.addEventListener('pointerdown', (e) => {
     const r = canvas.getBoundingClientRect();
-    g.targetX = e.clientX - r.left;
+    g.aimX = e.clientX - r.left;
+    g.aimY = e.clientY - r.top;
+    g.targetX = g.aimX;
   });
+
   canvas.addEventListener('pointermove', (e) => {
     if (!e.buttons) return;
     const r = canvas.getBoundingClientRect();
     g.targetX = e.clientX - r.left;
   });
+
+  canvas.addEventListener('dblclick', () => { g.aimX = null; g.aimY = null; });
+
+  /* -------------------------------------------------- 技能 */
+
+  function useBomb() {
+    if (busy || g.skillBomb > 0) return;
+    g.skillBomb = 18;
+    g.flash = 0.35;
+    g.shake = 0.45;
+    const dmg = g.dmg * 6;
+    g.zombies.slice().forEach((z) => {
+      burst(z.x, z.y + z.h / 2, '#ffd166', 6);
+      damageZombie(z, dmg);
+    });
+    CG.sfx.hit();
+    syncHud();
+    CG.ui.toast('炸弹！全场伤害 ' + Math.round(dmg));
+  }
+
+  function useFreeze() {
+    if (busy || g.skillFreeze > 0) return;
+    g.skillFreeze = 22;
+    const until = performance.now() + 4000;
+    g.zombies.forEach((z) => { z.slowUntil = Math.max(z.slowUntil, until); });
+    CG.sfx.ok();
+    syncHud();
+    CG.ui.toast('冰冻 4 秒');
+  }
+
+  $('btnBomb').addEventListener('click', useBomb);
+  $('btnFreeze').addEventListener('click', useFreeze);
 
   async function togglePause() {
     if (busy || paused) return;
@@ -792,5 +968,15 @@
   window.__game = g;
 })();
 </script>
-</body>
+<script>
+(function () {
+  setTimeout(function () {
+    if (window.__game) return;
+    var d = document.createElement('div');
+    d.style.cssText = 'position:fixed;left:0;right:0;top:0;bottom:0;z-index:99999;display:-webkit-box;display:flex;-webkit-box-align:center;align-items:center;justify-content:center;padding:24px;background:#050912;color:#eef4ff;font:14px/1.8 -apple-system,"PingFang SC","Microsoft YaHei",sans-serif;text-align:center';
+    d.innerHTML = '<div>这个浏览器内核太旧，跑不动这个游戏。<br>请换 Chrome / Safari / UC 打开，或者点右上角「···」用系统浏览器打开。</div>';
+    document.body.appendChild(d);
+  }, 2500);
+})();
+</script></body>
 </html>
