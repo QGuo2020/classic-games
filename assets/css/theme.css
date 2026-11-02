@@ -584,3 +584,18 @@ html[data-theme="light"] .card-icon { background: rgba(15, 40, 60, 0.03); }
   .toolbar { gap: 8px; }
   .toolbar .note { display: none; }
 }
+
+/* 手机：把上下两条栏压薄，给游戏区留出更多空间 */
+@media (max-width: 520px) {
+  .topbar { gap: 6px; padding: calc(6px + var(--safe-top)) 10px 6px; }
+  .back { padding: 5px 8px; font-size: 12px; }
+  .game-title { font-size: 12.5px; max-width: 38vw; }
+  .hud { gap: 8px; }
+  .stat { font-size: 8.5px; letter-spacing: 0.05em; }
+  .stat b { font-size: 12px; margin-top: 1px; }
+  .icon-btn { width: 30px; height: 30px; font-size: 13px; }
+  .topbar .actions { gap: 5px; margin-left: 4px; }
+  .toolbar { padding: 6px 10px calc(6px + var(--safe-bottom)); gap: 6px; }
+  .toolbar .btn { padding: 7px 10px; font-size: 12.5px; }
+  .stage-wrap { min-height: 0; }
+}

@@ -868,6 +868,10 @@ async function main() {
   await shot('sokoban-mobile');
   await goto('/games/sudoku/index.html', { width: 400, height: 800 }, true);
   await shot('sudoku-mobile');
+  await goto('/games/invaders/index.html', { width: 390, height: 844 }, true);
+  await shot('invaders-mobile');
+  await goto('/games/zombies/index.html', { width: 390, height: 844 }, true);
+  await shot('zombies-mobile');
 
   await goto('/index.html');
 

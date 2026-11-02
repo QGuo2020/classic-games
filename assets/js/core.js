@@ -370,6 +370,41 @@
     });
   }
 
+  /* ------------------------------------------------------------ 调试浮层
+     在地址后面加 ?debug 就会显示 FPS / 画布尺寸 / DPR，方便手机上排查 */
+
+  if (/[?&]debug/.test(location.search)) {
+    const badge = document.createElement('div');
+    badge.style.cssText = 'position:fixed;left:8px;bottom:8px;z-index:9999;font:11px/1.45 monospace;' +
+      'color:#5df2d0;background:rgba(0,0,0,.72);padding:5px 7px;border-radius:6px;' +
+      'pointer-events:none;white-space:pre;text-align:left';
+    document.body.appendChild(badge);
+
+    let frames = 0;
+    let last = performance.now();
+    let fps = 0;
+
+    (function tick(t) {
+      frames += 1;
+      if (t - last >= 1000) {
+        fps = Math.round((frames * 1000) / (t - last));
+        frames = 0;
+        last = t;
+      }
+      requestAnimationFrame(tick);
+    })(performance.now());
+
+    setInterval(() => {
+      const c = document.querySelector('canvas');
+      const r = c ? c.getBoundingClientRect() : { width: 0, height: 0 };
+      badge.textContent =
+        'fps ' + fps +
+        '  canvas ' + Math.round(r.width) + 'x' + Math.round(r.height) +
+        '  dpr ' + (window.devicePixelRatio || 1) +
+        '\ninner ' + window.innerWidth + 'x' + window.innerHeight;
+    }, 500);
+  }
+
   global.CG = {
     store, theme, audio, sfx, util, ui, colors, progress, loop, soundButton, PREFIX
   };

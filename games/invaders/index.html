@@ -541,28 +541,50 @@
   /* -------------------------------------------------- 绘制 */
 
   const FRAME_MS = 420;
+  const alienCache = new Map();
+
+  /** 把外星人画到离屏 canvas 一次，之后每帧只 drawImage —— 手机上快很多 */
+  function alienSprite(a, type, frame, color) {
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const key = type + '|' + frame + '|' + color + '|' + Math.round(a.w);
+    const hit = alienCache.get(key);
+    if (hit) return hit;
+
+    const G = 7;
+    const cssW = a.w + G * 2;
+    const cssH = a.h + G * 2;
+    const cv = document.createElement('canvas');
+    cv.width = Math.max(1, Math.round(cssW * dpr));
+    cv.height = Math.max(1, Math.round(cssH * dpr));
+    const c2 = cv.getContext('2d');
+    c2.scale(dpr, dpr);
+
+    const cw = a.w / 11;
+    const ch = a.h / 8;
+    c2.fillStyle = color;
+    c2.shadowColor = color;
+    c2.shadowBlur = 8;
+    const rowsS = SPRITES[type][frame];
+    for (let r = 0; r < 8; r++) {
+      const line = rowsS[r];
+      for (let i = 0; i < 11; i++) {
+        if (line[i] === 'X') c2.fillRect(G + i * cw, G + r * ch, cw + 0.6, ch + 0.6);
+      }
+    }
+
+    const spr = { cv, w: cssW, h: cssH, g: G };
+    alienCache.set(key, spr);
+    return spr;
+  }
 
   function drawAlien(a, c) {
     const type = a.type || 'crab';
-    const frames = SPRITES[type];
-    const frame = frames[Math.floor(now() / FRAME_MS + a.row * 0.4) % 2];
-    const cols = 11, rows = 8;
-    const cw = a.w / cols;
-    const ch = a.h / rows;
-
+    const frame = Math.floor(now() / FRAME_MS + a.row * 0.4) % 2;
     const base = type === 'squid' ? c.hint : type === 'crab' ? c.accent : c.violet;
     const color = a.flash > 0 ? c.text : a.hp > 1 ? c.danger : base;
 
-    ctx.fillStyle = color;
-    ctx.shadowColor = color;
-    ctx.shadowBlur = c.light ? 0 : 10;
-    for (let r = 0; r < rows; r++) {
-      const line = frame[r];
-      for (let i = 0; i < cols; i++) {
-        if (line[i] === 'X') ctx.fillRect(a.x + i * cw, a.y + r * ch, cw + 0.6, ch + 0.6);
-      }
-    }
-    ctx.shadowBlur = 0;
+    const spr = alienSprite(a, type, frame, color);
+    ctx.drawImage(spr.cv, a.x - spr.g, a.y - spr.g, spr.w, spr.h);
 
     if (a.hp > 1) {
       ctx.strokeStyle = c.text;

@@ -488,23 +488,18 @@
 
   /* -------------------------------------------------- 绘制 */
 
-  function drawZombie(z, c) {
-    const t = z.type;
-    const w = z.w, h = z.h;
-    const color = z.hit > 0 ? '#ffffff' : z.color;
-    const swing = Math.sin(z.phase * 1.7);
+  const zombieCache = new Map();
 
-    ctx.save();
-    ctx.translate(z.x, z.y + h * 0.5);
-
+  /** 把僵尸画进离屏 canvas（按步态分 8 档），每帧只 drawImage */
+  function drawZombieShape(g2, t, w, h, color, swing) {
     // 影子
-    ctx.fillStyle = 'rgba(0,0,0,0.28)';
-    ctx.beginPath();
-    ctx.ellipse(0, h * 0.46, w * 0.4, h * 0.07, 0, 0, Math.PI * 2);
-    ctx.fill();
+    g2.fillStyle = 'rgba(0,0,0,0.26)';
+    g2.beginPath();
+    g2.ellipse(0, h * 0.46, w * 0.4, h * 0.07, 0, 0, Math.PI * 2);
+    g2.fill();
 
-    ctx.shadowColor = color;
-    ctx.shadowBlur = c.light ? 0 : 10;
+    g2.shadowColor = color;
+    g2.shadowBlur = 10;
 
     const bw = w * (t === 'tank' ? 1 : t === 'runner' ? 0.68 : 0.84);
     const bh = h * (t === 'tank' ? 0.42 : 0.38);
@@ -513,78 +508,102 @@
     const headY = bodyTop - headR * 0.75;
 
     // 腿
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.72;
+    g2.fillStyle = color;
+    g2.globalAlpha = 0.72;
     const legW = w * 0.19;
     const legTop = bh * 0.42;
-    ctx.fillRect(-w * 0.26 + swing * w * 0.06, legTop, legW, h * 0.2);
-    ctx.fillRect(w * 0.07 - swing * w * 0.06, legTop, legW, h * 0.2);
+    g2.fillRect(-w * 0.26 + swing * w * 0.06, legTop, legW, h * 0.2);
+    g2.fillRect(w * 0.07 - swing * w * 0.06, legTop, legW, h * 0.2);
 
     // 身体
-    ctx.globalAlpha = 0.95;
+    g2.globalAlpha = 0.95;
     const br = bw * 0.26;
-    ctx.beginPath();
-    ctx.moveTo(-bw / 2 + br, bodyTop);
-    ctx.arcTo(bw / 2, bodyTop, bw / 2, bodyTop + bh, br);
-    ctx.arcTo(bw / 2, bodyTop + bh, -bw / 2, bodyTop + bh, br);
-    ctx.arcTo(-bw / 2, bodyTop + bh, -bw / 2, bodyTop, br);
-    ctx.arcTo(-bw / 2, bodyTop, bw / 2, bodyTop, br);
-    ctx.closePath();
-    ctx.fill();
+    g2.beginPath();
+    g2.moveTo(-bw / 2 + br, bodyTop);
+    g2.arcTo(bw / 2, bodyTop, bw / 2, bodyTop + bh, br);
+    g2.arcTo(bw / 2, bodyTop + bh, -bw / 2, bodyTop + bh, br);
+    g2.arcTo(-bw / 2, bodyTop + bh, -bw / 2, bodyTop, br);
+    g2.arcTo(-bw / 2, bodyTop, bw / 2, bodyTop, br);
+    g2.closePath();
+    g2.fill();
 
-    // 手臂（疾跑者前伸）
-    ctx.globalAlpha = 0.8;
+    // 手臂
+    g2.globalAlpha = 0.8;
     const armW = w * 0.17;
     const armH = h * (t === 'tank' ? 0.24 : 0.3);
     const armY = bodyTop + bh * 0.18 - (t === 'runner' ? h * 0.14 : 0);
-    ctx.fillRect(-bw / 2 - armW * 0.75, armY + swing * h * 0.02, armW, armH);
-    ctx.fillRect(bw / 2 - armW * 0.25, armY - swing * h * 0.02, armW, armH);
+    g2.fillRect(-bw / 2 - armW * 0.75, armY + swing * h * 0.02, armW, armH);
+    g2.fillRect(bw / 2 - armW * 0.25, armY - swing * h * 0.02, armW, armH);
 
     // 头
-    ctx.globalAlpha = 1;
-    ctx.beginPath();
-    ctx.arc(0, headY, headR, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.shadowBlur = 0;
+    g2.globalAlpha = 1;
+    g2.beginPath();
+    g2.arc(0, headY, headR, 0, Math.PI * 2);
+    g2.fill();
+    g2.shadowBlur = 0;
 
-    // 眼睛（Boss 发红光）
-    ctx.fillStyle = t === 'boss' ? '#ffd166' : 'rgba(5,9,18,0.92)';
+    // 眼睛
+    g2.fillStyle = t === 'boss' ? '#ffd166' : 'rgba(5,9,18,0.92)';
     const er = Math.max(1.6, w * 0.065);
-    ctx.beginPath();
-    ctx.arc(-headR * 0.42, headY - headR * 0.1, er, 0, Math.PI * 2);
-    ctx.arc(headR * 0.42, headY - headR * 0.1, er, 0, Math.PI * 2);
-    ctx.fill();
+    g2.beginPath();
+    g2.arc(-headR * 0.42, headY - headR * 0.1, er, 0, Math.PI * 2);
+    g2.arc(headR * 0.42, headY - headR * 0.1, er, 0, Math.PI * 2);
+    g2.fill();
 
     // 嘴
-    ctx.fillRect(-headR * 0.4, headY + headR * 0.35, headR * 0.8, Math.max(1.4, h * 0.03));
+    g2.fillRect(-headR * 0.4, headY + headR * 0.35, headR * 0.8, Math.max(1.4, h * 0.03));
 
-    // 坦克：胸甲；Boss：肩刺
     if (t === 'tank') {
-      ctx.fillStyle = 'rgba(5,9,18,0.35)';
-      ctx.fillRect(-bw * 0.34, bodyTop + bh * 0.12, bw * 0.68, bh * 0.32);
+      g2.fillStyle = 'rgba(5,9,18,0.35)';
+      g2.fillRect(-bw * 0.34, bodyTop + bh * 0.12, bw * 0.68, bh * 0.32);
     }
     if (t === 'boss') {
-      ctx.fillStyle = color;
+      g2.fillStyle = color;
       for (let i = -1; i <= 1; i += 2) {
-        ctx.beginPath();
-        ctx.moveTo(i * bw * 0.5, bodyTop + h * 0.02);
-        ctx.lineTo(i * bw * 0.62, bodyTop - h * 0.14);
-        ctx.lineTo(i * bw * 0.38, bodyTop + h * 0.02);
-        ctx.closePath();
-        ctx.fill();
+        g2.beginPath();
+        g2.moveTo(i * bw * 0.5, bodyTop + h * 0.02);
+        g2.lineTo(i * bw * 0.62, bodyTop - h * 0.14);
+        g2.lineTo(i * bw * 0.38, bodyTop + h * 0.02);
+        g2.closePath();
+        g2.fill();
       }
-      ctx.fillStyle = '#ffd166';
-      ctx.beginPath();
-      ctx.moveTo(-headR * 0.7, headY - headR * 0.9);
-      ctx.lineTo(-headR * 0.3, headY - headR * 1.6);
-      ctx.lineTo(0, headY - headR * 0.95);
-      ctx.lineTo(headR * 0.3, headY - headR * 1.6);
-      ctx.lineTo(headR * 0.7, headY - headR * 0.9);
-      ctx.closePath();
-      ctx.fill();
+      g2.fillStyle = '#ffd166';
+      g2.beginPath();
+      g2.moveTo(-headR * 0.7, headY - headR * 0.9);
+      g2.lineTo(-headR * 0.3, headY - headR * 1.6);
+      g2.lineTo(0, headY - headR * 0.95);
+      g2.lineTo(headR * 0.3, headY - headR * 1.6);
+      g2.lineTo(headR * 0.7, headY - headR * 0.9);
+      g2.closePath();
+      g2.fill();
+    }
+  }
+
+  function drawZombie(z, c) {
+    const t = z.type;
+    const w = z.w, h = z.h;
+    const color = z.hit > 0 ? '#ffffff' : z.color;
+    const step = Math.round(((z.phase % (Math.PI * 2)) / (Math.PI * 2)) * 8) % 8;
+    const key = t + '|' + color + '|' + step + '|' + Math.round(w);
+
+    let spr = zombieCache.get(key);
+    if (!spr) {
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      const G = 12;
+      const cssW = w + G * 2;
+      const cssH = h + G * 2;
+      const cv = document.createElement('canvas');
+      cv.width = Math.round(cssW * dpr);
+      cv.height = Math.round(cssH * dpr);
+      const c2 = cv.getContext('2d');
+      c2.scale(dpr, dpr);
+      c2.translate(G + w / 2, G + h / 2);
+      drawZombieShape(c2, t, w, h, color, Math.sin((step / 8) * Math.PI * 2));
+      spr = { cv, w: cssW, h: cssH, g: G };
+      zombieCache.set(key, spr);
     }
 
-    ctx.restore();
+    ctx.drawImage(spr.cv, z.x - w / 2 - spr.g, z.y + h / 2 - spr.g, spr.w, spr.h);
 
     // 血条
     if (z.hp < z.maxHp) {
