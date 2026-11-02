@@ -406,12 +406,12 @@ async function main() {
     const laserScore2 = await evaluate('window.__game.score');
     check('invaders 粗激光持续灼烧能击杀', laserScore2 > laserScore, `${laserScore} -> ${laserScore2}`);
 
-    // 道具：掉一个 P 并让它落到船上，武器应该 +1（先关掉可能弹出的结算层）
+    // 道具：掉一个 P 并让它落到船上，武器应该 +1（先关掉可能弹出的结算层，等新波建完）
     let wAfter = 0;
-    for (let attempt = 0; attempt < 3 && wAfter === 0; attempt++) {
+    for (let attempt = 0; attempt < 4 && wAfter === 0; attempt++) {
+      await evaluate("(() => { const b = document.querySelector('#overlay.show .btn.primary'); if (b) b.click(); })()");
+      await sleep(400);
       const dropped = await evaluate(`(() => {
-        const b = document.querySelector('#overlay.show .btn.primary');
-        if (b) b.click();
         const g = window.__game;
         g.debugWeapon(0);
         g.debugDrop('weapon');
@@ -420,9 +420,10 @@ async function main() {
         d.y = g.player.y + g.player.h / 2;
         return g.drops.length;
       })()`);
-      await sleep(300);
+      await sleep(260);
       wAfter = await evaluate('window.__game.weapon');
       if (dropped === 0) break;
+      // 如果这次没生效（弹层又开了），再来一次
     }
     check('invaders 捡到 P 自动升级武器', wAfter > 0, 'weapon=' + wAfter);
 

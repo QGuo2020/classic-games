@@ -72,8 +72,8 @@
     level: 1,
     need: 12,
 
-    dmg: 14,
-    rate: 0.35,
+    dmg: 16,
+    rate: 0.28,
     multi: 1,
     pierce: 0,
     crit: 0.05,
@@ -92,7 +92,8 @@
     targetX: null,
     keys: { left: false, right: false },
     shake: 0,
-    flash: 0
+    flash: 0,
+    muzzle: 0
   };
 
   const prog = CG.progress('zombies');
@@ -109,10 +110,10 @@
   ];
 
   const TYPES = {
-    walker: { hp: 1, speed: 1, size: 26, color: '#7ee787', score: 1 },
-    runner: { hp: 0.6, speed: 2.1, size: 22, color: '#ffd166', score: 1 },
-    tank: { hp: 3.2, speed: 0.62, size: 36, color: '#ff9f6e', score: 2 },
-    boss: { hp: 9, speed: 0.42, size: 52, color: '#ff5d78', score: 6 }
+    walker: { hp: 1, speed: 1, size: 30, colors: ['#7ee787', '#86efac', '#6ee7b7'], score: 1 },
+    runner: { hp: 0.6, speed: 2.1, size: 26, colors: ['#ffd166', '#fbbf24', '#fde68a'], score: 1 },
+    tank: { hp: 3.2, speed: 0.62, size: 42, colors: ['#ff9f6e', '#fb923c', '#fca5a5'], score: 2 },
+    boss: { hp: 9, speed: 0.42, size: 60, colors: ['#ff5d78', '#f43f5e'], score: 6 }
   };
 
   function syncHud() {
@@ -130,8 +131,8 @@
     g.coins = 0;
     g.level = 1;
     g.need = 12;
-    g.dmg = 14;
-    g.rate = 0.35;
+    g.dmg = 16;
+    g.rate = 0.28;
     g.multi = 1;
     g.pierce = 0;
     g.crit = 0.05;
@@ -141,13 +142,14 @@
     g.bullets = [];
     g.particles = [];
     g.spawnTimer = 1.2;
-    g.waveTimer = 30;
+    g.waveTimer = 24;
     g.fireTimer = 0;
     g.pending = 0;
     g.hero.x = W / 2;
     g.hero.y = H - 86;
     g.shake = 0;
     g.flash = 0;
+    g.muzzle = 0;
 
     // 开局先给三只，别让画面空着
     for (let i = 0; i < 3; i++) {
@@ -161,7 +163,7 @@
 
   /* -------------------------------------------------- 僵尸 */
 
-  function hpBase() { return 24 + g.wave * 13; }
+  function hpBase() { return 30 + g.wave * 16; }
   function speedBase() { return 34 + g.wave * 1.6; }
 
   function spawnZombie(type) {
@@ -178,15 +180,16 @@
       speed: speedBase() * t.speed * (0.9 + Math.random() * 0.25),
       slowUntil: 0,
       wobble: Math.random() * Math.PI * 2,
+      phase: Math.random() * Math.PI * 2,
       hit: 0,
-      color: t.color
+      color: t.colors[Math.floor(Math.random() * t.colors.length)]
     });
   }
 
   function pickType() {
     const r = Math.random();
-    if (r < 0.16 && g.wave >= 3) return 'runner';
-    if (r < 0.32 && g.wave >= 4) return 'tank';
+    if (r < 0.16 && g.wave >= 1) return 'runner';
+    if (r < 0.32 && g.wave >= 2) return 'tank';
     return 'walker';
   }
 
@@ -288,10 +291,20 @@
 
     const hx = g.hero.x;
     const hy = g.hero.y - 12;
+    const nowTs = performance.now();
 
     targets.forEach((z) => {
-      const tx = z.x + z.w / 2;
-      const ty = z.y + z.h / 2;
+      // 提前量：僵尸一直在往下走，直接瞄准当前位置会打空
+      let tx = z.x;
+      let ty = z.y + z.h / 2;
+      for (let i = 0; i < 3; i++) {
+        const dist = Math.hypot(tx - hx, ty - hy) || 1;
+        const flight = dist / g.bulletSpeed;
+        const slow = nowTs < z.slowUntil ? 0.6 : 1;
+        ty = z.y + z.h / 2 + z.speed * slow * flight;
+        tx = z.x;
+      }
+
       const dx = tx - hx, dy = ty - hy;
       const len = Math.hypot(dx, dy) || 1;
       const crit = Math.random() < g.crit;
@@ -307,7 +320,9 @@
       });
     });
 
+    g.shots = (g.shots || 0) + targets.length;
     g.aim = targets[0];
+    g.muzzle = 0.09;
     CG.audio.tone(660, 0.03, { type: 'square', vol: 0.012 });
   }
 
@@ -358,6 +373,7 @@
 
     const t = performance.now();
     g.shake = Math.max(0, g.shake - dt);
+    g.muzzle = Math.max(0, g.muzzle - dt);
     g.flash = Math.max(0, g.flash - dt);
 
     // 英雄走位
@@ -374,7 +390,7 @@
     g.waveTimer -= dt;
     if (g.waveTimer <= 0) {
       g.wave += 1;
-      g.waveTimer = 30;
+      g.waveTimer = 24;
       if (g.wave % 5 === 0) {
         spawnZombie('boss');
         CG.ui.toast('第 ' + g.wave + ' 波 · 巨型僵尸出现');
@@ -387,7 +403,7 @@
     // 刷怪
     g.spawnTimer -= dt;
     if (g.spawnTimer <= 0) {
-      g.spawnTimer = Math.max(0.55, 1.9 - g.wave * 0.07) * (0.8 + Math.random() * 0.5);
+      g.spawnTimer = Math.max(0.4, 0.8 - g.wave * 0.05) * (0.8 + Math.random() * 0.3);
       const count = 1 + (g.wave >= 6 && Math.random() < 0.3 ? 1 : 0);
       for (let i = 0; i < count; i++) spawnZombie(pickType());
     }
@@ -400,6 +416,7 @@
       const slow = t < z.slowUntil ? 0.6 : 1;
       z.y += z.speed * slow * dt;
       z.wobble += dt * 3;
+      z.phase += dt * (3 + z.speed * 0.12);
       z.x += Math.sin(z.wobble) * 6 * dt;
 
       if (z.y + z.h >= baseLine) {
@@ -417,24 +434,37 @@
       fire();
     }
 
-    // 子弹
+    // 子弹（分步推进 + 扫掠判定，速度快也不会穿模）
     for (let i = g.bullets.length - 1; i >= 0; i--) {
       const b = g.bullets[i];
-      b.x += b.vx * dt;
-      b.y += b.vy * dt;
-      if (b.y < -30 || b.y > H + 30 || b.x < -30 || b.x > W + 30) {
-        g.bullets.splice(i, 1);
-        continue;
-      }
+      const travel = Math.hypot(b.vx, b.vy) * dt;
+      const steps = Math.max(1, Math.ceil(travel / 7));
+      const sdt = dt / steps;
+      let gone = false;
 
-      for (const z of g.zombies) {
-        if (b.x > z.x - z.w / 2 && b.x < z.x + z.w / 2 &&
-            b.y > z.y && b.y < z.y + z.h) {
-          damageZombie(z, b.dmg);
-          if (b.freeze) z.slowUntil = t + 2000;
-          if (b.pierce > 0) b.pierce -= 1;
-          else { g.bullets.splice(i, 1); }
+      for (let s = 0; s < steps && !gone; s++) {
+        b.x += b.vx * sdt;
+        b.y += b.vy * sdt;
+
+        if (b.y < -30 || b.y > H + 30 || b.x < -30 || b.x > W + 30) {
+          g.bullets.splice(i, 1);
+          gone = true;
           break;
+        }
+
+        for (const z of g.zombies) {
+          if (b.x > z.x - z.w / 2 && b.x < z.x + z.w / 2 &&
+              b.y > z.y && b.y < z.y + z.h) {
+            g.hits = (g.hits || 0) + 1;
+            damageZombie(z, b.dmg);
+            if (b.freeze) z.slowUntil = t + 2000;
+            if (b.pierce > 0) b.pierce -= 1;
+            else {
+              g.bullets.splice(i, 1);
+              gone = true;
+            }
+            break;
+          }
         }
       }
     }
@@ -459,59 +489,111 @@
   /* -------------------------------------------------- 绘制 */
 
   function drawZombie(z, c) {
-    const x = z.x, y = z.y, w = z.w, h = z.h;
+    const t = z.type;
+    const w = z.w, h = z.h;
     const color = z.hit > 0 ? '#ffffff' : z.color;
+    const swing = Math.sin(z.phase * 1.7);
 
     ctx.save();
+    ctx.translate(z.x, z.y + h * 0.5);
+
+    // 影子
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.beginPath();
+    ctx.ellipse(0, h * 0.46, w * 0.4, h * 0.07, 0, 0, Math.PI * 2);
+    ctx.fill();
+
     ctx.shadowColor = color;
-    ctx.shadowBlur = c.light ? 0 : 12;
+    ctx.shadowBlur = c.light ? 0 : 10;
+
+    const bw = w * (t === 'tank' ? 1 : t === 'runner' ? 0.68 : 0.84);
+    const bh = h * (t === 'tank' ? 0.42 : 0.38);
+    const bodyTop = -bh * 0.5;
+    const headR = w * (t === 'tank' ? 0.3 : t === 'runner' ? 0.26 : 0.29);
+    const headY = bodyTop - headR * 0.75;
+
+    // 腿
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.72;
+    const legW = w * 0.19;
+    const legTop = bh * 0.42;
+    ctx.fillRect(-w * 0.26 + swing * w * 0.06, legTop, legW, h * 0.2);
+    ctx.fillRect(w * 0.07 - swing * w * 0.06, legTop, legW, h * 0.2);
 
     // 身体
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.92;
-    const bx = x - w / 2, by = y + h * 0.34, bw = w, bh = h * 0.66;
-    const br = w * 0.24;
+    ctx.globalAlpha = 0.95;
+    const br = bw * 0.26;
     ctx.beginPath();
-    ctx.moveTo(bx + br, by);
-    ctx.arcTo(bx + bw, by, bx + bw, by + bh, br);
-    ctx.arcTo(bx + bw, by + bh, bx, by + bh, br);
-    ctx.arcTo(bx, by + bh, bx, by, br);
-    ctx.arcTo(bx, by, bx + bw, by, br);
+    ctx.moveTo(-bw / 2 + br, bodyTop);
+    ctx.arcTo(bw / 2, bodyTop, bw / 2, bodyTop + bh, br);
+    ctx.arcTo(bw / 2, bodyTop + bh, -bw / 2, bodyTop + bh, br);
+    ctx.arcTo(-bw / 2, bodyTop + bh, -bw / 2, bodyTop, br);
+    ctx.arcTo(-bw / 2, bodyTop, bw / 2, bodyTop, br);
     ctx.closePath();
     ctx.fill();
 
-    // 手臂
-    ctx.globalAlpha = 0.75;
-    ctx.fillRect(bx - w * 0.16, by + h * 0.06, w * 0.16, h * 0.34);
-    ctx.fillRect(bx + bw, by + h * 0.06, w * 0.16, h * 0.34);
+    // 手臂（疾跑者前伸）
+    ctx.globalAlpha = 0.8;
+    const armW = w * 0.17;
+    const armH = h * (t === 'tank' ? 0.24 : 0.3);
+    const armY = bodyTop + bh * 0.18 - (t === 'runner' ? h * 0.14 : 0);
+    ctx.fillRect(-bw / 2 - armW * 0.75, armY + swing * h * 0.02, armW, armH);
+    ctx.fillRect(bw / 2 - armW * 0.25, armY - swing * h * 0.02, armW, armH);
 
     // 头
     ctx.globalAlpha = 1;
     ctx.beginPath();
-    ctx.arc(x, y + h * 0.22, w * 0.32, 0, Math.PI * 2);
+    ctx.arc(0, headY, headR, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
-    ctx.globalAlpha = 1;
 
-    // 眼睛
-    ctx.fillStyle = 'rgba(5,9,18,0.9)';
+    // 眼睛（Boss 发红光）
+    ctx.fillStyle = t === 'boss' ? '#ffd166' : 'rgba(5,9,18,0.92)';
+    const er = Math.max(1.6, w * 0.065);
     ctx.beginPath();
-    ctx.arc(x - w * 0.12, y + h * 0.2, Math.max(1.8, w * 0.07), 0, Math.PI * 2);
-    ctx.arc(x + w * 0.12, y + h * 0.2, Math.max(1.8, w * 0.07), 0, Math.PI * 2);
+    ctx.arc(-headR * 0.42, headY - headR * 0.1, er, 0, Math.PI * 2);
+    ctx.arc(headR * 0.42, headY - headR * 0.1, er, 0, Math.PI * 2);
     ctx.fill();
 
     // 嘴
-    ctx.fillRect(x - w * 0.12, y + h * 0.3, w * 0.24, Math.max(1.5, h * 0.035));
+    ctx.fillRect(-headR * 0.4, headY + headR * 0.35, headR * 0.8, Math.max(1.4, h * 0.03));
+
+    // 坦克：胸甲；Boss：肩刺
+    if (t === 'tank') {
+      ctx.fillStyle = 'rgba(5,9,18,0.35)';
+      ctx.fillRect(-bw * 0.34, bodyTop + bh * 0.12, bw * 0.68, bh * 0.32);
+    }
+    if (t === 'boss') {
+      ctx.fillStyle = color;
+      for (let i = -1; i <= 1; i += 2) {
+        ctx.beginPath();
+        ctx.moveTo(i * bw * 0.5, bodyTop + h * 0.02);
+        ctx.lineTo(i * bw * 0.62, bodyTop - h * 0.14);
+        ctx.lineTo(i * bw * 0.38, bodyTop + h * 0.02);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.fillStyle = '#ffd166';
+      ctx.beginPath();
+      ctx.moveTo(-headR * 0.7, headY - headR * 0.9);
+      ctx.lineTo(-headR * 0.3, headY - headR * 1.6);
+      ctx.lineTo(0, headY - headR * 0.95);
+      ctx.lineTo(headR * 0.3, headY - headR * 1.6);
+      ctx.lineTo(headR * 0.7, headY - headR * 0.9);
+      ctx.closePath();
+      ctx.fill();
+    }
+
     ctx.restore();
 
     // 血条
     if (z.hp < z.maxHp) {
       const bwid = w * 1.1;
-      const bxx = x - bwid / 2;
-      const byy = y - 7;
+      const bxx = z.x - bwid / 2;
+      const byy = z.y - 8;
       ctx.fillStyle = c.line;
       ctx.fillRect(bxx, byy, bwid, 3);
-      ctx.fillStyle = z.type === 'boss' ? c.danger : c.hint;
+      ctx.fillStyle = t === 'boss' ? c.danger : c.hint;
       ctx.fillRect(bxx, byy, bwid * Math.max(0, z.hp / z.maxHp), 3);
     }
   }
@@ -546,6 +628,8 @@
     const baseLine = H - 54;
     ctx.fillStyle = c.light ? 'rgba(45,72,100,0.16)' : 'rgba(164,190,225,0.14)';
     ctx.fillRect(0, baseLine, W, 38);
+    // 城墙垛口
+    for (let x = 0; x < W; x += 30) ctx.fillRect(x, baseLine - 6, 16, 6);
     ctx.strokeStyle = c.accent;
     ctx.globalAlpha = 0.8;
     ctx.lineWidth = 2;
@@ -591,18 +675,36 @@
     const hx = g.hero.x, hy = g.hero.y;
     const aim = g.aim && g.zombies.includes(g.aim) ? g.aim : nearestTargets(1)[0];
     let angle = -Math.PI / 2;
-    if (aim) angle = Math.atan2((aim.y + aim.h / 2) - hy, (aim.x + aim.w / 2) - hx);
+    if (aim) angle = Math.atan2((aim.y + aim.h / 2) - hy, aim.x - hx);
 
+    // 底座
+    ctx.fillStyle = c.light ? 'rgba(45,72,100,0.18)' : 'rgba(164,190,225,0.16)';
+    ctx.beginPath();
+    ctx.ellipse(hx, hy + 18, 26, 8, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 炮管
     ctx.save();
     ctx.translate(hx, hy);
     ctx.rotate(angle + Math.PI / 2);
     ctx.fillStyle = c.text;
     ctx.shadowColor = c.accent;
     ctx.shadowBlur = c.light ? 0 : 14;
-    ctx.fillRect(-4, -26, 8, 26);
+    ctx.fillRect(-4, -30, 8, 30);
     ctx.shadowBlur = 0;
+
+    // 炮口火焰
+    if (g.muzzle > 0) {
+      ctx.fillStyle = c.hint;
+      ctx.globalAlpha = Math.min(1, g.muzzle * 12);
+      ctx.beginPath();
+      ctx.arc(0, -32, 7, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
     ctx.restore();
 
+    // 炮塔
     ctx.fillStyle = c.accent;
     ctx.shadowColor = c.accent;
     ctx.shadowBlur = c.light ? 0 : 16;
@@ -667,7 +769,7 @@
 
   // 调试钩子
   g.debugSpawn = spawnZombie;
-  g.debugState = () => ({ zombies: g.zombies.length, bullets: g.bullets.length, base: g.base, kills: g.kills, level: g.level });
+  g.debugState = () => ({ zombies: g.zombies.length, bullets: g.bullets.length, base: g.base, kills: g.kills, level: g.level, shots: g.shots || 0, hits: g.hits || 0, hero: { x: Math.round(g.hero.x), y: Math.round(g.hero.y) }, z0: g.zombies[0] ? { x: Math.round(g.zombies[0].x), y: Math.round(g.zombies[0].y), w: Math.round(g.zombies[0].w) } : null, b0: g.bullets[0] ? { x: Math.round(g.bullets[0].x), y: Math.round(g.bullets[0].y), vx: Math.round(g.bullets[0].vx), vy: Math.round(g.bullets[0].vy) } : null, W: W, H: H });
   window.__game = g;
 })();
 </script>
