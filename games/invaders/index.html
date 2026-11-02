@@ -51,15 +51,75 @@
   CG.theme.bind($('btnTheme'));
   CG.soundButton($('btnSound'));
 
-  const SPRITE = [
-    '0111110',
-    '1111111',
-    '1101011',
-    '1111111',
-    '0111110',
-    '0101010',
-    '1000001'
-  ];
+  // 三种外星人，每种两帧动画（致敬原版：章鱼 / 螃蟹 / 鱿鱼）
+  const SPRITES = {
+    squid: [
+      [
+        '...XXXXX...',
+        '..XXXXXXX..',
+        '.XX.XXX.XX.',
+        'XXX.XXX.XXX',
+        'XXXXXXXXXXX',
+        'X.XXXXXXX.X',
+        'X.X.....X.X',
+        '...XX.XX...'
+      ],
+      [
+        '...XXXXX...',
+        '..XXXXXXX..',
+        '.XX.XXX.XX.',
+        'XXX.XXX.XXX',
+        'XXXXXXXXXXX',
+        '..XXXXXXX..',
+        '.X.XXXXX.X.',
+        'X.........X'
+      ]
+    ],
+    crab: [
+      [
+        '..X.....X..',
+        'X..X...X..X',
+        'X.XXXXXXX.X',
+        'XXX.XXX.XXX',
+        'XXXXXXXXXXX',
+        '.XXXXXXXXX.',
+        '..X.....X..',
+        '.X.......X.'
+      ],
+      [
+        '..X.....X..',
+        '...X...X...',
+        '..XXXXXXX..',
+        '.XX.XXX.XX.',
+        'XXXXXXXXXXX',
+        'X.XXXXXXX.X',
+        'X.X.....X.X',
+        '...XX.XX...'
+      ]
+    ],
+    octopus: [
+      [
+        '....XXX....',
+        '.XXXXXXXXX.',
+        'XXXXXXXXXXX',
+        'XXX..X..XXX',
+        'XXXXXXXXXXX',
+        '...XX.XX...',
+        '..XX.X.XX..',
+        'XX.......XX'
+      ],
+      [
+        '....XXX....',
+        '.XXXXXXXXX.',
+        'XXXXXXXXXXX',
+        'XXX..X..XXX',
+        'XXXXXXXXXXX',
+        '..XXX.XXX..',
+        '.XX.....XX.',
+        '..X.....X..'
+      ]
+    ]
+  };
 
   // 武器升级链：单发 → 双发 → 三发 → S 弹 → 细激光 → 中激光 → 粗激光
   const WEAPONS = [
@@ -80,7 +140,7 @@
     weapon: 0,
     player: { x: 0, y: 0, w: 36, h: 20 },
     aliens: [], dir: 1, stepTimer: 0,
-    bullets: [], bombs: [], drops: [],
+    bullets: [], bombs: [], drops: [], particles: [],
     fireTimer: 0,
     bombTimer: 0,
     kills: 0,
@@ -122,9 +182,10 @@
         g.aliens.push({
           x: ox + c * cell,
           y: oy + r * cell,
-          w: size, h: size,
+          w: size, h: size * 0.86,
           alive: true,
           row: r,
+          type: r === 0 ? 'squid' : r <= 2 ? 'crab' : 'octopus',
           hp: r < armorRows ? 2 : 1,
           flash: 0
         });
@@ -136,6 +197,7 @@
     g.bullets = [];
     g.bombs = [];
     g.drops = [];
+    g.particles = [];
     g.fireTimer = 0;
     g.bombTimer = 0.8;
     g.kills = 0;
@@ -143,7 +205,22 @@
     g.player.x = W / 2 - g.player.w / 2;
     g.level = n;
     g.invulnUntil = now() + 900;
+    makeStars();
     syncHud();
+  }
+
+  function makeStars() {
+    g.stars = [];
+    const n = Math.max(40, Math.round((W * H) / 16000));
+    for (let i = 0; i < n; i++) {
+      g.stars.push({
+        x: Math.random() * W,
+        y: Math.random() * H,
+        r: Math.random() < 0.82 ? 1 : 2,
+        a: 0.15 + Math.random() * 0.5,
+        v: 4 + Math.random() * 12
+      });
+    }
   }
 
   function interval() {
@@ -185,6 +262,7 @@
     g.fireTimer -= dt;
     if (g.fireTimer > 0) return;
     g.fireTimer = w.cd;
+    g.muzzle = 0.08;
 
     const px = playerCenter();
     const py = g.player.y - 4;
@@ -196,7 +274,9 @@
     } else {
       // S 弹：五发扇形
       for (let i = -2; i <= 2; i++) {
-        g.bullets.push({ x: px, y: py, vx: i * 190, vy: -720, dmg: 1 });
+        const vx = i * 190, vy = -720;
+        const len = Math.hypot(vx, vy);
+        g.bullets.push({ x: px + (vx / len) * 12, y: py + (vy / len) * 12, vx, vy, dmg: 1 });
       }
     }
     CG.audio.tone(760, 0.03, { type: 'square', vol: 0.014 });
@@ -232,6 +312,15 @@
     g.score += 10 + (3 - a.row) * 5;
     g.kills += 1;
     CG.sfx.step();
+    for (let i = 0; i < 10; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const sp = 40 + Math.random() * 150;
+      g.particles.push({
+        x: a.x + a.w / 2, y: a.y + a.h / 2,
+        vx: Math.cos(ang) * sp, vy: Math.sin(ang) * sp,
+        life: 0.42, max: 0.42
+      });
+    }
 
     // 关卡越高，道具越多
     const chance = 0.07 + g.level * 0.015;
@@ -358,6 +447,7 @@
 
     const t = now();
     g.flash = Math.max(0, g.flash - dt);
+    g.muzzle = Math.max(0, g.muzzle - dt);
 
     const px = g.player;
     const sp = 470;
@@ -437,27 +527,52 @@
     }
 
     g.aliens.forEach((a) => { a.flash = Math.max(0, a.flash - dt); });
+
+    for (let i = g.particles.length - 1; i >= 0; i--) {
+      const px = g.particles[i];
+      px.x += px.vx * dt;
+      px.y += px.vy * dt;
+      px.vx *= 0.96;
+      px.life -= dt;
+      if (px.life <= 0) g.particles.splice(i, 1);
+    }
   }
 
   /* -------------------------------------------------- 绘制 */
 
+  const FRAME_MS = 420;
+
   function drawAlien(a, c) {
-    const cell = a.w / 7;
-    const armored = a.hp > 1;
-    const color = a.flash > 0 ? c.text : armored ? c.violet : c.accent;
+    const type = a.type || 'crab';
+    const frames = SPRITES[type];
+    const frame = frames[Math.floor(now() / FRAME_MS + a.row * 0.4) % 2];
+    const cols = 11, rows = 8;
+    const cw = a.w / cols;
+    const ch = a.h / rows;
+
+    const base = type === 'squid' ? c.hint : type === 'crab' ? c.accent : c.violet;
+    const color = a.flash > 0 ? c.text : a.hp > 1 ? c.danger : base;
+
     ctx.fillStyle = color;
     ctx.shadowColor = color;
-    ctx.shadowBlur = c.light ? 0 : 8;
-    for (let r = 0; r < 7; r++) {
-      const row = SPRITE[r];
-      for (let i = 0; i < 7; i++) {
-        if (row[i] === '1') ctx.fillRect(a.x + i * cell, a.y + r * cell, cell + 0.5, cell + 0.5);
+    ctx.shadowBlur = c.light ? 0 : 10;
+    for (let r = 0; r < rows; r++) {
+      const line = frame[r];
+      for (let i = 0; i < cols; i++) {
+        if (line[i] === 'X') ctx.fillRect(a.x + i * cw, a.y + r * ch, cw + 0.6, ch + 0.6);
       }
     }
     ctx.shadowBlur = 0;
-    if (armored) {
-      ctx.fillStyle = c.bg;
-      ctx.fillRect(a.x + cell * 1.6, a.y + cell * 3, a.w - cell * 3.2, cell * 0.9);
+
+    if (a.hp > 1) {
+      ctx.strokeStyle = c.text;
+      ctx.globalAlpha = 0.6;
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(a.x - 1, a.y + a.h + 3);
+      ctx.lineTo(a.x + a.w + 1, a.y + a.h + 3);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
     }
   }
 
@@ -471,6 +586,14 @@
       ctx.fillRect(0, 0, W, H);
     }
 
+    // 星空
+    ctx.fillStyle = c.text;
+    (g.stars || []).forEach((st) => {
+      ctx.globalAlpha = st.a;
+      ctx.fillRect(st.x, st.y, st.r, st.r);
+    });
+    ctx.globalAlpha = 1;
+
     // 地面线
     ctx.strokeStyle = c.lineStrong;
     ctx.lineWidth = 1;
@@ -480,6 +603,14 @@
     ctx.stroke();
 
     g.aliens.forEach((a) => { if (a.alive) drawAlien(a, c); });
+
+    // 爆点
+    g.particles.forEach((pt) => {
+      ctx.globalAlpha = Math.max(0, pt.life / pt.max);
+      ctx.fillStyle = c.hint;
+      ctx.fillRect(pt.x - 1.5, pt.y - 1.5, 3, 3);
+    });
+    ctx.globalAlpha = 1;
 
     // 激光
     const w = WEAPONS[g.weapon];
@@ -508,18 +639,56 @@
     const p = g.player;
     const invuln = now() < g.invulnUntil;
     ctx.globalAlpha = invuln && Math.floor(now() / 90) % 2 ? 0.35 : 1;
-    ctx.fillStyle = c.accent;
+
+    // 尾焰
+    const flick = 0.65 + 0.35 * Math.random();
+    ctx.fillStyle = c.hint;
+    ctx.globalAlpha *= 0.85;
+    ctx.beginPath();
+    ctx.moveTo(p.x + p.w * 0.43, p.y + p.h * 0.86);
+    ctx.lineTo(p.x + p.w * 0.5, p.y + p.h + 11 * flick);
+    ctx.lineTo(p.x + p.w * 0.57, p.y + p.h * 0.86);
+    ctx.closePath();
+    ctx.fill();
+    ctx.globalAlpha = invuln && Math.floor(now() / 90) % 2 ? 0.35 : 1;
+
+    // 机身
+    ctx.fillStyle = c.text;
     ctx.shadowColor = c.accent;
     ctx.shadowBlur = c.light ? 0 : 16;
     ctx.beginPath();
-    ctx.moveTo(p.x + p.w / 2, p.y - 4);
-    ctx.lineTo(p.x + p.w, p.y + p.h);
-    ctx.lineTo(p.x + p.w * 0.7, p.y + p.h * 0.72);
-    ctx.lineTo(p.x + p.w * 0.3, p.y + p.h * 0.72);
-    ctx.lineTo(p.x, p.y + p.h);
+    ctx.moveTo(p.x + p.w / 2, p.y - 6);
+    ctx.lineTo(p.x + p.w * 0.62, p.y + p.h * 0.42);
+    ctx.lineTo(p.x + p.w, p.y + p.h * 0.8);
+    ctx.lineTo(p.x + p.w * 0.9, p.y + p.h);
+    ctx.lineTo(p.x + p.w * 0.58, p.y + p.h * 0.86);
+    ctx.lineTo(p.x + p.w * 0.42, p.y + p.h * 0.86);
+    ctx.lineTo(p.x + p.w * 0.1, p.y + p.h);
+    ctx.lineTo(p.x, p.y + p.h * 0.8);
+    ctx.lineTo(p.x + p.w * 0.38, p.y + p.h * 0.42);
     ctx.closePath();
     ctx.fill();
     ctx.shadowBlur = 0;
+
+    // 炮口闪光
+    if (g.muzzle > 0) {
+      ctx.globalAlpha = Math.min(1, g.muzzle * 12);
+      const mg = ctx.createRadialGradient(p.x + p.w / 2, p.y - 6, 0, p.x + p.w / 2, p.y - 6, 11);
+      mg.addColorStop(0, c.text);
+      mg.addColorStop(0.4, c.hint);
+      mg.addColorStop(1, 'rgba(255,209,102,0)');
+      ctx.fillStyle = mg;
+      ctx.beginPath();
+      ctx.arc(p.x + p.w / 2, p.y - 6, 11, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+    }
+
+    // 座舱
+    ctx.fillStyle = c.accent;
+    ctx.beginPath();
+    ctx.ellipse(p.x + p.w / 2, p.y + p.h * 0.44, p.w * 0.11, p.h * 0.2, 0, 0, Math.PI * 2);
+    ctx.fill();
     ctx.globalAlpha = 1;
 
     // 护盾
@@ -535,23 +704,37 @@
 
     // 子弹
     if (w.kind !== 'laser') {
-      ctx.fillStyle = c.text;
+      ctx.shadowColor = c.accent;
+      ctx.shadowBlur = c.light ? 0 : 10;
       g.bullets.forEach((b) => {
         ctx.save();
         ctx.translate(b.x, b.y);
         ctx.rotate(Math.atan2(b.vy, b.vx) + Math.PI / 2);
-        ctx.fillRect(-1.6, -9, 3.2, 11);
+        ctx.fillStyle = c.hint;
+        ctx.fillRect(-2.2, -9, 4.4, 13);
+        ctx.fillStyle = c.text;
+        ctx.fillRect(-1, -7, 2, 9);
         ctx.restore();
       });
+      ctx.shadowBlur = 0;
     }
 
     // 炸弹
     g.bombs.forEach((b) => {
-      ctx.fillStyle = c.danger;
-      ctx.shadowColor = c.danger;
-      ctx.shadowBlur = c.light ? 0 : 8;
-      ctx.fillRect(b.x - 2, b.y - 9, 4, 10);
-      ctx.shadowBlur = 0;
+      const grad = ctx.createRadialGradient(b.x, b.y, 0, b.x, b.y, 10);
+      grad.addColorStop(0, c.text);
+      grad.addColorStop(0.35, c.danger);
+      grad.addColorStop(1, 'rgba(255,93,120,0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(b.x, b.y, 10, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255,93,120,0.5)';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(b.x, b.y - 12);
+      ctx.lineTo(b.x, b.y - 2);
+      ctx.stroke();
     });
 
     // 道具
