@@ -119,7 +119,7 @@ npx serve .                # 或 python -m http.server 8080
 node tools/check.mjs
 ```
 
-会起一个本地静态服务器 + 无头 Chrome（DevTools 协议，不需要装 puppeteer），跑 103 项检查：
+会起一个本地静态服务器 + 无头 Chrome（DevTools 协议，不需要装 puppeteer），跑 108 项检查：
 
 1. 门户 + 12 个游戏 + 404 页逐个打开：控制台零报错、canvas 真的画了东西；
 2. 交互测试（读游戏内部状态，不只看像素）：打砖块发射后球真的在飞、且不会瞬间清屏；

@@ -605,6 +605,52 @@ async function main() {
     check('sudoku 生成合法终盘', s0.ok === true, JSON.stringify(s0));
     check('sudoku 难度线索数量合理', s0.given >= 27 && s0.given <= 50, 'given=' + s0.given);
 
+    // 题面必须唯一解：在 node 里独立数一遍解
+    const puzzle = await evaluate('Array.from(window.__game.puzzle)');
+    const sol = await evaluate('Array.from(window.__game.solution)');
+    const subsetOk = puzzle.every((v, i) => !v || v === sol[i]);
+    check('sudoku 题面是终盘的子集', subsetOk === true);
+
+    const countSolutions = (grid, limit) => {
+      const g2 = grid.slice();
+      const rows = new Array(9).fill(0);
+      const cols = new Array(9).fill(0);
+      const boxes = new Array(9).fill(0);
+      const boxOf = (x, y) => Math.floor(y / 3) * 3 + Math.floor(x / 3);
+      for (let i = 0; i < 81; i++) {
+        const v = g2[i];
+        if (!v) continue;
+        const x = i % 9, y = (i / 9) | 0, b = boxOf(x, y);
+        rows[y] |= 1 << v; cols[x] |= 1 << v; boxes[b] |= 1 << v;
+      }
+      let count = 0;
+      const dfs = () => {
+        let best = -1, bestMask = 0, bestCount = 10;
+        for (let i = 0; i < 81; i++) {
+          if (g2[i]) continue;
+          const x = i % 9, y = (i / 9) | 0, b = boxOf(x, y);
+          const mask = (~(rows[y] | cols[x] | boxes[b])) & 0x3FE;
+          let c = 0;
+          for (let v = 1; v <= 9; v++) if (mask & (1 << v)) c++;
+          if (c === 0) return;
+          if (c < bestCount) { best = i; bestMask = mask; bestCount = c; if (c === 1) break; }
+        }
+        if (best < 0) { count++; return; }
+        const x = best % 9, y = (best / 9) | 0, b = boxOf(x, y);
+        for (let v = 1; v <= 9; v++) {
+          if (!(bestMask & (1 << v))) continue;
+          const bit = 1 << v;
+          g2[best] = v; rows[y] |= bit; cols[x] |= bit; boxes[b] |= bit;
+          dfs();
+          rows[y] &= ~bit; cols[x] &= ~bit; boxes[b] &= ~bit; g2[best] = 0;
+          if (count >= limit) return;
+        }
+      };
+      dfs();
+      return count;
+    };
+    check('sudoku 题面唯一解', countSolutions(puzzle, 2) === 1, 'solutions=' + countSolutions(puzzle, 2));
+
     // 点一个空格 + 按键填数
     const spot = await evaluate(`(() => {
       const g = window.__game;
@@ -645,6 +691,17 @@ async function main() {
       await sleep(400);
       const next = await evaluate(`(() => { const g = window.__game; return { level: g.level, solved: g.solved }; })()`);
       check('sudoku 点下一关进入新关卡', next.level === 2 && next.solved === false, JSON.stringify(next));
+    }
+
+    // 逐关验证题面：每关都必须唯一解，且给定数字和终盘一致
+    for (const lv of [2, 3, 4]) {
+      await evaluate(`localStorage.setItem('cg:progress:sudoku', JSON.stringify({ level: ${lv}, max: ${lv}, best: 0, wins: 0 }))`);
+      await goto('/games/sudoku/index.html');
+      const puz = await evaluate('Array.from(window.__game.puzzle)');
+      const solN = await evaluate('Array.from(window.__game.solution)');
+      const okSubset = puz.every((v, i) => !v || v === solN[i]);
+      const n = countSolutions(puz, 2);
+      check(`sudoku 第 ${lv} 关题面可解且唯一`, okSubset && n === 1, `solutions=${n}`);
     }
   }
 

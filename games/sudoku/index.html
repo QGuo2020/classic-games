@@ -329,7 +329,7 @@
     g.value[i] = g.value[i] === d ? 0 : d;
     g.notes[i].clear();
 
-    if (g.value[i] && conflictsAt(i)) {
+    if (g.value[i] && isWrong(i)) {
       g.mistakes += 1;
       CG.sfx.bad();
       if (navigator.vibrate) navigator.vibrate(20);
@@ -340,6 +340,12 @@
     syncHud();
     syncPad();
     checkWin();
+  }
+
+  /** 和标准答案不一致（或与同行同列同宫重复）就算填错 */
+  function isWrong(i) {
+    if (!g.value[i] || g.given[i]) return false;
+    return g.value[i] !== g.solution[i] || conflictsAt(i);
   }
 
   function eraseCell(i) {
@@ -385,9 +391,30 @@
 
   function checkWin() {
     if (g.solved) return;
-    for (let i = 0; i < 81; i++) if (g.value[i] !== g.solution[i]) return;
-    g.solved = true;
-    winLevel();
+
+    let filled = 0;
+    let wrong = 0;
+    for (let i = 0; i < 81; i++) {
+      if (g.value[i]) filled++;
+      if (g.value[i] !== g.solution[i]) wrong++;
+    }
+
+    // 填满了但不对：把错的标出来，别让人对着满盘干瞪眼
+    if (filled === 81 && wrong > 0) {
+      g.wrongFlashUntil = performance.now() + 2600;
+      if (!g.warnedFull) {
+        g.warnedFull = true;
+        CG.ui.toast('有 ' + wrong + ' 格填错了，红色格子需要改');
+        CG.sfx.bad();
+      }
+      return;
+    }
+    g.warnedFull = false;
+
+    if (wrong === 0) {
+      g.solved = true;
+      winLevel();
+    }
   }
 
   async function winLevel() {
@@ -500,10 +527,13 @@
       const cy = oy + y * cell + cell / 2 + 1;
 
       if (g.value[i]) {
-        const bad = conflictsAt(i) && !g.given[i];
+        const bad = isWrong(i);
+        const pulsing = bad && performance.now() < (g.wrongFlashUntil || 0);
+        ctx.globalAlpha = pulsing ? 0.55 + 0.45 * Math.abs(Math.sin(performance.now() / 180)) : 1;
         ctx.fillStyle = g.given[i] ? c.text : bad ? c.danger : c.accent;
-        ctx.font = (g.given[i] ? '600 ' : '500 ') + Math.round(cell * 0.5) + 'px ' + getComputedStyle(document.body).fontFamily;
+        ctx.font = (g.given[i] ? '600 ' : bad ? '700 ' : '500 ') + Math.round(cell * 0.5) + 'px ' + getComputedStyle(document.body).fontFamily;
         ctx.fillText(String(g.value[i]), cx, cy);
+        ctx.globalAlpha = 1;
         continue;
       }
 
