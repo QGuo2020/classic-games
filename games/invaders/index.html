@@ -11,9 +11,10 @@
 
 <header class="topbar">
   <a class="back" href="../../index.html">← 大厅</a>
-  <div class="game-title">太空侵略者<small>Invaders</small></div>
+  <div class="game-title">太空侵略者<small>Space Shooter</small></div>
   <div class="hud">
     <span class="stat">波次<b id="hudLevel">1</b></span>
+    <span class="stat">武器<b id="hudWeapon" class="accent">单发</b></span>
     <span class="stat">分数<b id="hudScore">0</b></span>
     <span class="stat">生命<b id="hudLives" class="accent">3</b></span>
   </div>
@@ -32,7 +33,7 @@
   <button class="btn" id="btnRestart">重开 <kbd>R</kbd></button>
   <button class="btn" id="btnPause">暂停 <kbd>P</kbd></button>
   <span class="spacer"></span>
-  <span class="note"><kbd>←</kbd> <kbd>→</kbd> 移动 · <kbd>空格</kbd> 射击</span>
+  <span class="note">自动开火 · 左右移动 / 拖动 · 捡 P 升级武器</span>
 </footer>
 
 <script src="../../assets/js/core.js"></script>
@@ -42,7 +43,10 @@
 
   const canvas = document.getElementById('c');
   const $ = (id) => document.getElementById(id);
-  const hud = { level: $('hudLevel'), score: $('hudScore'), lives: $('hudLives') };
+  const hud = {
+    level: $('hudLevel'), weapon: $('hudWeapon'),
+    score: $('hudScore'), lives: $('hudLives')
+  };
 
   CG.theme.bind($('btnTheme'));
   CG.soundButton($('btnSound'));
@@ -57,29 +61,51 @@
     '1000001'
   ];
 
+  // 武器升级链：单发 → 双发 → 三发 → S 弹 → 细激光 → 中激光 → 粗激光
+  const WEAPONS = [
+    { name: '单发', kind: 'shot', cd: 0.2, offsets: [0] },
+    { name: '双发', kind: 'shot', cd: 0.2, offsets: [-7, 7] },
+    { name: '三发', kind: 'shot', cd: 0.21, offsets: [-15, 0, 15] },
+    { name: 'S 弹', kind: 'spread', cd: 0.3 },
+    { name: '细激光', kind: 'laser', width: 7, dps: 5 },
+    { name: '中激光', kind: 'laser', width: 12, dps: 8 },
+    { name: '粗激光', kind: 'laser', width: 19, dps: 12 }
+  ];
+
   let W = 0, H = 0, ctx = null;
   let paused = false, busy = false;
 
   const g = {
     level: 1, score: 0, lives: 3,
-    player: { x: 0, y: 0, w: 34, h: 18, cooldown: 0 },
+    weapon: 0,
+    player: { x: 0, y: 0, w: 36, h: 20 },
     aliens: [], dir: 1, stepTimer: 0,
-    bullets: [], bombs: [],
+    bullets: [], bombs: [], drops: [],
+    fireTimer: 0,
     bombTimer: 0,
-    keys: { left: false, right: false },
+    kills: 0,
+    invulnUntil: 0,
+    shieldUntil: 0,
     moveTarget: null,
-    flash: 0
+    keys: { left: false, right: false },
+    flash: 0,
+    laserPulse: 0
   };
 
   const prog = CG.progress('invaders');
   g.level = Math.max(1, prog.level);
 
+  const now = () => performance.now();
+
   function syncHud() {
     hud.level.textContent = g.level;
+    hud.weapon.textContent = WEAPONS[g.weapon].name;
     hud.score.textContent = g.score;
     hud.lives.textContent = g.lives;
     hud.lives.className = g.lives <= 1 ? 'danger' : 'accent';
   }
+
+  /* -------------------------------------------------- 波次 */
 
   function buildWave(n) {
     const cols = Math.min(9, 5 + Math.floor((n + 1) / 2));
@@ -87,8 +113,7 @@
     const cell = Math.min(64, (Math.min(W, 900) - 80) / cols);
     const size = cell * 0.74;
     const ox = (W - cols * cell) / 2 + (cell - size) / 2;
-    const oy = 84;
-    // 第 2 波起顶排是装甲兵，要打两下；第 5 波起两排都是
+    const oy = 88;
     const armorRows = n >= 5 ? 2 : n >= 2 ? 1 : 0;
 
     g.aliens = [];
@@ -100,27 +125,32 @@
           w: size, h: size,
           alive: true,
           row: r,
-          hp: r < armorRows ? 2 : 1
+          hp: r < armorRows ? 2 : 1,
+          flash: 0
         });
       }
     }
+
     g.dir = 1;
     g.stepTimer = 0;
     g.bullets = [];
     g.bombs = [];
-    g.bombTimer = 0.6;
-    g.player.w = 34;
-    g.player.h = 18;
-    g.player.y = H - 52;
+    g.drops = [];
+    g.fireTimer = 0;
+    g.bombTimer = 0.8;
+    g.kills = 0;
+    g.player.y = H - 56;
     g.player.x = W / 2 - g.player.w / 2;
     g.level = n;
+    g.invulnUntil = now() + 900;
     syncHud();
   }
 
   function interval() {
     const alive = g.aliens.filter((a) => a.alive).length;
     const total = Math.max(1, g.aliens.length);
-    return Math.max(75, 430 - g.level * 32 - (1 - alive / total) * 330);
+    // 比上一版慢很多，留出躲子弹和捡道具的时间
+    return Math.max(160, 640 - g.level * 30 - (1 - alive / total) * 300);
   }
 
   function stepAliens() {
@@ -130,10 +160,10 @@
     let minX = Infinity, maxX = -Infinity;
     alive.forEach((a) => { minX = Math.min(minX, a.x); maxX = Math.max(maxX, a.x + a.w); });
 
-    const dx = Math.max(8, 14 + g.level * 2);
+    const dx = Math.max(8, 12 + g.level);
     if (maxX + dx > W - 12 || minX - dx < 12) {
       g.dir *= -1;
-      alive.forEach((a) => { a.y += 22 + g.level * 3; });
+      alive.forEach((a) => { a.y += 16 + g.level * 2; });
     } else {
       alive.forEach((a) => { a.x += dx * g.dir; });
     }
@@ -142,24 +172,135 @@
     if (bottom > g.player.y - 8) gameOver('外星人突破防线');
   }
 
-  function shoot() {
-    if (paused || busy) return;
-    if (g.player.cooldown > 0) return;
-    g.player.cooldown = 0.22;
-    g.bullets.push({ x: g.player.x + g.player.w / 2, y: g.player.y, vy: -620 });
-    CG.audio.tone(880, 0.05, { type: 'square', vol: 0.025 });
+  /* -------------------------------------------------- 开火 */
+
+  function playerCenter() {
+    return g.player.x + g.player.w / 2;
+  }
+
+  function autoFire(dt) {
+    const w = WEAPONS[g.weapon];
+    if (w.kind === 'laser') return;   // 激光在 updateLaser 里结算
+
+    g.fireTimer -= dt;
+    if (g.fireTimer > 0) return;
+    g.fireTimer = w.cd;
+
+    const px = playerCenter();
+    const py = g.player.y - 4;
+
+    if (w.kind === 'shot') {
+      w.offsets.forEach((off) => {
+        g.bullets.push({ x: px + off, y: py, vx: 0, vy: -780, dmg: 1 });
+      });
+    } else {
+      // S 弹：五发扇形
+      for (let i = -2; i <= 2; i++) {
+        g.bullets.push({ x: px, y: py, vx: i * 190, vy: -720, dmg: 1 });
+      }
+    }
+    CG.audio.tone(760, 0.03, { type: 'square', vol: 0.014 });
+  }
+
+  function updateLaser(dt) {
+    const w = WEAPONS[g.weapon];
+    if (w.kind !== 'laser') return;
+
+    const beamX = playerCenter();
+    const half = w.width / 2;
+    g.laserPulse += dt;
+
+    let hitAny = false;
+    for (const a of g.aliens) {
+      if (!a.alive) continue;
+      if (a.x + a.w < beamX - half || a.x > beamX + half) continue;
+      if (a.y + a.h < 0) continue;
+      hitAny = true;
+      a.hp -= w.dps * dt;
+      a.flash = 0.12;
+      if (a.hp <= 0) killAlien(a);
+    }
+
+    if (hitAny && Math.random() < 0.25) {
+      CG.audio.tone(320 + Math.random() * 60, 0.02, { type: 'sawtooth', vol: 0.008 });
+    }
+  }
+
+  function killAlien(a) {
+    if (!a.alive) return;
+    a.alive = false;
+    g.score += 10 + (3 - a.row) * 5;
+    g.kills += 1;
+    CG.sfx.step();
+
+    // 关卡越高，道具越多
+    const chance = 0.07 + g.level * 0.015;
+    if (g.kills % 7 === 0 || Math.random() < chance) spawnDrop(a);
+    syncHud();
+
+    if (!g.aliens.some((x) => x.alive)) waveClear();
+  }
+
+  function spawnDrop(a) {
+    const roll = Math.random();
+    let type = 'weapon';
+    if (roll > 0.86) type = 'life';
+    else if (roll > 0.74) type = 'shield';
+
+    g.drops.push({
+      x: a.x + a.w / 2,
+      y: a.y + a.h / 2,
+      vy: 95,
+      type,
+      born: now(),
+      size: Math.max(16, a.w * 0.55)
+    });
+  }
+
+  function collectDrop(d) {
+    if (d.type === 'weapon') {
+      if (g.weapon < WEAPONS.length - 1) {
+        g.weapon += 1;
+        CG.sfx.ok();
+        CG.ui.toast('武器升级：' + WEAPONS[g.weapon].name);
+      } else {
+        g.score += 200;
+        CG.sfx.ok();
+        CG.ui.toast('武器已满级 +200');
+      }
+    } else if (d.type === 'shield') {
+      g.shieldUntil = now() + 6000;
+      CG.sfx.ok();
+      CG.ui.toast('护盾 6 秒');
+    } else {
+      g.lives = Math.min(5, g.lives + 1);
+      CG.sfx.ok();
+      CG.ui.toast('补给 +1 生命');
+    }
+    syncHud();
   }
 
   function hitPlayer() {
+    if (now() < g.invulnUntil) return;
+    if (now() < g.shieldUntil) {
+      g.shieldUntil = 0;
+      g.flash = 0.2;
+      CG.sfx.bounce();
+      return;
+    }
+
     g.lives -= 1;
-    syncHud();
+    g.weapon = Math.max(0, g.weapon - 1);
     g.bombs = [];
-    g.flash = 0.35;
+    g.flash = 0.4;
+    g.invulnUntil = now() + 1600;
     CG.sfx.bad();
+    syncHud();
+
     if (g.lives <= 0) gameOver('战舰被击毁');
     else {
       g.player.x = W / 2 - g.player.w / 2;
-      g.bullets = [];
+      CG.ui.toast('武器降级：' + WEAPONS[g.weapon].name);
     }
   }
 
@@ -172,7 +313,7 @@
     prog.win(g.score);
     const r = await CG.ui.modal({
       title: '第 ' + n + ' 波清空',
-      text: '得分 <b>' + g.score + '</b><br>下一波外星舰队规模更大。',
+      text: '得分 <b>' + g.score + '</b> · 武器 <b>' + WEAPONS[g.weapon].name + '</b><br>下一波外星舰队更密，道具也更多。',
       actions: [
         { label: '下一波', value: 'next', primary: true },
         { label: '留在这里', value: 'stay' }
@@ -181,6 +322,7 @@
     busy = false;
     if (r === 'next') {
       g.score += 100;
+      g.lives = Math.min(5, g.lives + 1);
       buildWave(n + 1);
     }
   }
@@ -191,41 +333,41 @@
     CG.sfx.lose();
     const r = await CG.ui.modal({
       title: '防线失守',
-      text: (reason || '') + '<br>本局得分 <b>' + g.score + '</b>',
+      text: (reason || '') + '<br>打到第 <b>' + g.level + '</b> 波，得分 <b>' + g.score + '</b>',
       actions: [
-        { label: '重打这一波', value: 'retry', primary: true },
-        { label: '从第 1 波开始', value: 'reset' }
+        { label: '再来一局', value: 'retry', primary: true },
+        { label: '回到大厅', value: 'exit' }
       ]
     });
     busy = false;
-    if (r === 'reset') {
+    if (r === 'retry') {
       g.score = 0;
       g.lives = 3;
-      prog.reset();
+      g.weapon = 0;
+      g.level = 1;
       buildWave(1);
     } else {
-      g.lives = 3;
-      buildWave(g.level);
+      location.href = '../../index.html';
     }
-    syncHud();
   }
 
-  /* -------------------------------------------------------- 更新 */
+  /* -------------------------------------------------- 更新 */
 
   function update(dt) {
     if (paused || busy) return;
 
+    const t = now();
     g.flash = Math.max(0, g.flash - dt);
-    g.player.cooldown = Math.max(0, g.player.cooldown - dt);
 
-    const sp = 460;
-    if (g.keys.left) { g.player.x -= sp * dt; g.moveTarget = null; }
-    if (g.keys.right) { g.player.x += sp * dt; g.moveTarget = null; }
+    const px = g.player;
+    const sp = 470;
+    if (g.keys.left) { px.x -= sp * dt; g.moveTarget = null; }
+    if (g.keys.right) { px.x += sp * dt; g.moveTarget = null; }
     if (g.moveTarget != null) {
-      const goal = g.moveTarget - g.player.w / 2;
-      g.player.x += (goal - g.player.x) * Math.min(1, dt * 16);
+      const goal = g.moveTarget - px.w / 2;
+      px.x += (goal - px.x) * Math.min(1, dt * 18);
     }
-    g.player.x = CG.util.clamp(g.player.x, 10, W - g.player.w - 10);
+    px.x = CG.util.clamp(px.x, 10, W - px.w - 10);
 
     g.stepTimer += dt * 1000;
     if (g.stepTimer >= interval()) {
@@ -233,49 +375,41 @@
       stepAliens();
     }
 
+    autoFire(dt);
+    updateLaser(dt);
+
+    // 子弹
     for (let i = g.bullets.length - 1; i >= 0; i--) {
       const b = g.bullets[i];
+      b.x += b.vx * dt;
       b.y += b.vy * dt;
-      if (b.y < -10) { g.bullets.splice(i, 1); continue; }
-      let hit = false;
+      if (b.y < -20 || b.x < -20 || b.x > W + 20) { g.bullets.splice(i, 1); continue; }
+
       for (const a of g.aliens) {
         if (!a.alive) continue;
         if (b.x > a.x && b.x < a.x + a.w && b.y > a.y && b.y < a.y + a.h) {
-          a.hp -= 1;
-          hit = true;
-          if (a.hp <= 0) {
-            a.alive = false;
-            g.score += 10 + (3 - a.row) * 5;
-            CG.sfx.step();
-          } else {
-            g.score += 2;
-            CG.sfx.step();
-          }
-          syncHud();
+          a.hp -= b.dmg;
+          a.flash = 0.12;
+          if (a.hp <= 0) killAlien(a);
+          b.dead = true;
           break;
         }
       }
-      if (hit) {
-        g.bullets.splice(i, 1);
-        if (!g.aliens.some((a) => a.alive)) waveClear();
-      }
+      if (b.dead) g.bullets.splice(i, 1);
     }
 
+    // 外星人炸弹
     g.bombTimer -= dt;
     if (g.bombTimer <= 0 && g.aliens.some((a) => a.alive)) {
-      g.bombTimer = Math.max(0.2, 0.8 - g.level * 0.07) + Math.random() * 0.3;
+      g.bombTimer = Math.max(0.45, 1.1 - g.level * 0.05) + Math.random() * 0.4;
       const shooters = g.aliens.filter((a) => a.alive);
       let a = shooters[Math.floor(Math.random() * shooters.length)];
-
-      // 第 2 波起有一半的炸弹是瞄准玩家的，站着不动会被打
-      if (g.level >= 2 && Math.random() < 0.5) {
-        const px = g.player.x + g.player.w / 2;
-        a = shooters.reduce((best, cur) => {
-          return Math.abs(cur.x + cur.w / 2 - px) < Math.abs(best.x + best.w / 2 - px) ? cur : best;
-        }, shooters[0]);
+      if (g.level >= 3 && Math.random() < 0.4) {
+        a = shooters.reduce((best, cur) =>
+          Math.abs(cur.x + cur.w / 2 - playerCenter()) < Math.abs(best.x + best.w / 2 - playerCenter()) ? cur : best
+        , shooters[0]);
       }
-
-      g.bombs.push({ x: a.x + a.w / 2, y: a.y + a.h, vy: 250 + g.level * 16 });
+      g.bombs.push({ x: a.x + a.w / 2, y: a.y + a.h, vy: 210 + g.level * 14 });
     }
 
     for (let i = g.bombs.length - 1; i >= 0; i--) {
@@ -283,22 +417,37 @@
       b.y += b.vy * dt;
       if (b.y > H + 10) { g.bombs.splice(i, 1); continue; }
       const p = g.player;
-      if (b.x > p.x - 4 && b.x < p.x + p.w + 4 && b.y > p.y - 4 && b.y < p.y + p.h) {
+      if (b.x > p.x + 6 && b.x < p.x + p.w - 6 && b.y > p.y - 2 && b.y < p.y + p.h) {
         g.bombs.splice(i, 1);
         hitPlayer();
       }
     }
+
+    // 道具
+    for (let i = g.drops.length - 1; i >= 0; i--) {
+      const d = g.drops[i];
+      d.y += d.vy * dt;
+      if (d.y > H + 20) { g.drops.splice(i, 1); continue; }
+      const p = g.player;
+      if (Math.abs(d.x - (p.x + p.w / 2)) < d.size / 2 + p.w / 2 &&
+          Math.abs(d.y - (p.y + p.h / 2)) < d.size / 2 + p.h / 2) {
+        g.drops.splice(i, 1);
+        collectDrop(d);
+      }
+    }
+
+    g.aliens.forEach((a) => { a.flash = Math.max(0, a.flash - dt); });
   }
 
-  /* -------------------------------------------------------- 绘制 */
+  /* -------------------------------------------------- 绘制 */
 
   function drawAlien(a, c) {
     const cell = a.w / 7;
     const armored = a.hp > 1;
-    const color = armored ? c.violet : c.accent;
+    const color = a.flash > 0 ? c.text : armored ? c.violet : c.accent;
     ctx.fillStyle = color;
     ctx.shadowColor = color;
-    ctx.shadowBlur = c.light ? 0 : 10;
+    ctx.shadowBlur = c.light ? 0 : 8;
     for (let r = 0; r < 7; r++) {
       const row = SPRITE[r];
       for (let i = 0; i < 7; i++) {
@@ -307,7 +456,6 @@
     }
     ctx.shadowBlur = 0;
     if (armored) {
-      // 装甲兵：中间画一条深色腰带
       ctx.fillStyle = c.bg;
       ctx.fillRect(a.x + cell * 1.6, a.y + cell * 3, a.w - cell * 3.2, cell * 0.9);
     }
@@ -319,10 +467,11 @@
     ctx.fillRect(0, 0, W, H);
 
     if (g.flash > 0) {
-      ctx.fillStyle = 'rgba(255,93,120,' + (g.flash * 0.35) + ')';
+      ctx.fillStyle = 'rgba(255,93,120,' + (g.flash * 0.3) + ')';
       ctx.fillRect(0, 0, W, H);
     }
 
+    // 地面线
     ctx.strokeStyle = c.lineStrong;
     ctx.lineWidth = 1;
     ctx.beginPath();
@@ -332,28 +481,113 @@
 
     g.aliens.forEach((a) => { if (a.alive) drawAlien(a, c); });
 
+    // 激光
+    const w = WEAPONS[g.weapon];
+    if (w.kind === 'laser') {
+      const bx = playerCenter();
+      const flicker = 0.85 + 0.15 * Math.sin(g.laserPulse * 40);
+      const grad = ctx.createLinearGradient(bx - w.width / 2, 0, bx + w.width / 2, 0);
+      grad.addColorStop(0, 'rgba(255,93,120,0)');
+      grad.addColorStop(0.5, c.danger);
+      grad.addColorStop(1, 'rgba(255,93,120,0)');
+      ctx.globalAlpha = flicker;
+      ctx.fillStyle = grad;
+      ctx.shadowColor = c.danger;
+      ctx.shadowBlur = c.light ? 4 : 22;
+      ctx.fillRect(bx - w.width / 2, 0, w.width, g.player.y);
+      ctx.shadowBlur = 0;
+      ctx.globalAlpha = 1;
+      // 中心亮线
+      ctx.fillStyle = c.text;
+      ctx.globalAlpha = 0.95;
+      ctx.fillRect(bx - Math.max(1, w.width * 0.12), 0, Math.max(2, w.width * 0.24), g.player.y);
+      ctx.globalAlpha = 1;
+    }
+
+    // 玩家
     const p = g.player;
+    const invuln = now() < g.invulnUntil;
+    ctx.globalAlpha = invuln && Math.floor(now() / 90) % 2 ? 0.35 : 1;
     ctx.fillStyle = c.accent;
     ctx.shadowColor = c.accent;
     ctx.shadowBlur = c.light ? 0 : 16;
     ctx.beginPath();
-    ctx.moveTo(p.x + p.w / 2, p.y);
+    ctx.moveTo(p.x + p.w / 2, p.y - 4);
     ctx.lineTo(p.x + p.w, p.y + p.h);
+    ctx.lineTo(p.x + p.w * 0.7, p.y + p.h * 0.72);
+    ctx.lineTo(p.x + p.w * 0.3, p.y + p.h * 0.72);
     ctx.lineTo(p.x, p.y + p.h);
     ctx.closePath();
     ctx.fill();
     ctx.shadowBlur = 0;
+    ctx.globalAlpha = 1;
 
-    ctx.fillStyle = c.text;
-    g.bullets.forEach((b) => { ctx.fillRect(b.x - 1.5, b.y - 10, 3, 10); });
+    // 护盾
+    if (now() < g.shieldUntil) {
+      ctx.strokeStyle = c.violet;
+      ctx.globalAlpha = 0.55 + 0.25 * Math.sin(now() / 120);
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(p.x + p.w / 2, p.y + p.h / 2, p.w * 0.85, 0, Math.PI * 2);
+      ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
 
+    // 子弹
+    if (w.kind !== 'laser') {
+      ctx.fillStyle = c.text;
+      g.bullets.forEach((b) => {
+        ctx.save();
+        ctx.translate(b.x, b.y);
+        ctx.rotate(Math.atan2(b.vy, b.vx) + Math.PI / 2);
+        ctx.fillRect(-1.6, -9, 3.2, 11);
+        ctx.restore();
+      });
+    }
+
+    // 炸弹
     g.bombs.forEach((b) => {
       ctx.fillStyle = c.danger;
-      ctx.fillRect(b.x - 2, b.y - 8, 4, 8);
+      ctx.shadowColor = c.danger;
+      ctx.shadowBlur = c.light ? 0 : 8;
+      ctx.fillRect(b.x - 2, b.y - 9, 4, 10);
+      ctx.shadowBlur = 0;
+    });
+
+    // 道具
+    g.drops.forEach((d) => {
+      const color = d.type === 'weapon' ? c.violet : d.type === 'shield' ? c.accent : c.danger;
+      const pulse = 1 + 0.12 * Math.sin(now() / 140);
+      const s = d.size * pulse;
+      ctx.save();
+      ctx.translate(d.x, d.y);
+      ctx.fillStyle = c.bg;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 2;
+      ctx.shadowColor = color;
+      ctx.shadowBlur = c.light ? 0 : 14;
+      const r = s * 0.28;
+      const half = s / 2;
+      ctx.beginPath();
+      ctx.moveTo(-half + r, -half);
+      ctx.arcTo(half, -half, half, half, r);
+      ctx.arcTo(half, half, -half, half, r);
+      ctx.arcTo(-half, half, -half, -half, r);
+      ctx.arcTo(-half, -half, half, -half, r);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = color;
+      ctx.font = '700 ' + Math.round(s * 0.56) + 'px ' + getComputedStyle(document.body).fontFamily;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(d.type === 'weapon' ? 'P' : d.type === 'shield' ? 'S' : '♥', 0, 1);
+      ctx.restore();
     });
   }
 
-  /* -------------------------------------------------------- 循环 */
+  /* -------------------------------------------------- 循环 */
 
   CG.loop((dt) => {
     const fit = CG.util.fit(canvas);
@@ -362,19 +596,18 @@
       const first = W === 0;
       W = fit.w; H = fit.h;
       if (first) buildWave(g.level);
-      else g.player.y = H - 52;
+      else g.player.y = H - 56;
     }
     update(dt);
     draw();
   });
 
-  /* -------------------------------------------------------- 输入 */
+  /* -------------------------------------------------- 输入 */
 
   document.addEventListener('keydown', (e) => {
     if (e.key === 'ArrowLeft' || e.key === 'a') g.keys.left = true;
     if (e.key === 'ArrowRight' || e.key === 'd') g.keys.right = true;
-    if (e.code === 'Space') { e.preventDefault(); shoot(); }
-    if (e.key === 'r' || e.key === 'R') { if (!busy) { g.lives = 3; buildWave(g.level); } }
+    if (e.key === 'r' || e.key === 'R') { if (!busy) buildWave(g.level); }
     if (e.key === 'p' || e.key === 'P') togglePause();
   });
   document.addEventListener('keyup', (e) => {
@@ -385,10 +618,9 @@
   canvas.addEventListener('pointerdown', (e) => {
     const r = canvas.getBoundingClientRect();
     g.moveTarget = e.clientX - r.left;
-    shoot();
   });
   canvas.addEventListener('pointermove', (e) => {
-    if (e.buttons) return;
+    if (!e.buttons) return;
     const r = canvas.getBoundingClientRect();
     g.moveTarget = e.clientX - r.left;
   });
@@ -400,15 +632,15 @@
     paused = false;
   }
 
-  $('btnRestart').addEventListener('click', () => {
-    if (busy) return;
-    g.lives = 3;
-    buildWave(g.level);
-  });
+  $('btnRestart').addEventListener('click', () => { if (!busy) buildWave(g.level); });
   $('btnPause').addEventListener('click', togglePause);
 
+  // 调试钩子
+  g.debugWave = buildWave;
+  g.debugWeapon = (i) => { g.weapon = CG.util.clamp(i, 0, WEAPONS.length - 1); syncHud(); };
+  g.debugDrop = (type) => spawnDrop({ x: g.player.x + g.player.w / 2 - 10, y: g.player.y - 220, w: 20, h: 20 });
+  g.debugState = () => ({ weapon: g.weapon, name: WEAPONS[g.weapon].name, bullets: g.bullets.length, drops: g.drops.length });
   window.__game = g;
-  g.debugWave = buildWave;   // 自动化测试用：直接跳到指定波次
 })();
 </script>
 </body>

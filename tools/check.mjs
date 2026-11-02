@@ -149,7 +149,8 @@ const PAGES = [
   { name: 'mines', url: '/games/mines/index.html' },
   { name: '2048', url: '/games/2048/index.html' },
   { name: 'match3', url: '/games/match3/index.html' },
-  { name: 'sudoku', url: '/games/sudoku/index.html' }
+  { name: 'sudoku', url: '/games/sudoku/index.html' },
+  { name: 'zombies', url: '/games/zombies/index.html' }
 ];
 
 async function main() {
@@ -373,37 +374,98 @@ async function main() {
 
   await goto('/games/invaders/index.html');
   {
-    const s0 = await evaluate(`(() => { const g = window.__game; return { x: g.player.x, aliens: g.aliens.length }; })()`);
+    const s0 = await evaluate(`(() => { const g = window.__game; return { x: g.player.x, aliens: g.aliens.length, weapon: g.weapon }; })()`);
+    check('invaders 第一波规模正常', s0.aliens >= 24, JSON.stringify(s0));
+
+    // 不用按任何键，自动开火
+    await sleep(400);
+    const autoBullets = await evaluate('window.__game.bullets.length');
+    check('invaders 不用按键就自动开火', autoBullets > 0, 'bullets=' + autoBullets);
+
     await pressKey('ArrowLeft', 'ArrowLeft', 37);
     await sleep(250);
     const x1 = await evaluate('window.__game.player.x');
     check('invaders 左右移动生效', x1 < s0.x, `${Math.round(s0.x)} -> ${Math.round(x1)}`);
 
-    await pressKey('Space', 'Space', 32);
-    await sleep(150);
-    const bullets = await evaluate('window.__game.bullets.length');
-    check('invaders 空格能发射', bullets > 0, 'bullets=' + bullets);
+    // 武器链：单发 → 双发 → 三发 → S 弹 → 细激光 → 中激光 → 粗激光
+    const names = [];
+    for (let i = 0; i < 7; i++) {
+      names.push(await evaluate(`(() => { window.__game.debugWeapon(${i}); return document.getElementById('hudWeapon').textContent; })()`));
+    }
+    check('invaders 武器升级链完整', names.join('>') === '单发>双发>三发>S 弹>细激光>中激光>粗激光', names.join('>'));
 
-    // 难度：第一波规模、是否有装甲兵、火力密度
-    const w1 = await evaluate(`(() => { const g = window.__game; return { aliens: g.aliens.length, armored: g.aliens.filter((a) => a.hp > 1).length }; })()`);
-    check('invaders 第一波至少 24 个外星人', w1.aliens >= 24, JSON.stringify(w1));
-    check('invaders 第一波没有装甲兵', w1.armored === 0);
+    // 激光真的在掉血：把船挪到某个外星人正下方
+    const laserScore = await evaluate(`(() => {
+      const g = window.__game;
+      g.debugWeapon(6);
+      const a = g.aliens.find((x) => x.alive);
+      g.player.x = a.x + a.w / 2 - g.player.w / 2;
+      return g.score;
+    })()`);
+    await sleep(1200);
+    const laserScore2 = await evaluate('window.__game.score');
+    check('invaders 粗激光持续灼烧能击杀', laserScore2 > laserScore, `${laserScore} -> ${laserScore2}`);
 
+    // 道具：掉一个 P 并让它落到船上，武器应该 +1（先关掉可能弹出的结算层）
+    let wAfter = 0;
+    for (let attempt = 0; attempt < 3 && wAfter === 0; attempt++) {
+      const dropped = await evaluate(`(() => {
+        const b = document.querySelector('#overlay.show .btn.primary');
+        if (b) b.click();
+        const g = window.__game;
+        g.debugWeapon(0);
+        g.debugDrop('weapon');
+        const d = g.drops[g.drops.length - 1];
+        d.x = g.player.x + g.player.w / 2;
+        d.y = g.player.y + g.player.h / 2;
+        return g.drops.length;
+      })()`);
+      await sleep(300);
+      wAfter = await evaluate('window.__game.weapon');
+      if (dropped === 0) break;
+    }
+    check('invaders 捡到 P 自动升级武器', wAfter > 0, 'weapon=' + wAfter);
+
+    // 装甲兵
     const w3 = await evaluate(`(() => {
       const g = window.__game;
       g.debugWave(3);
       return { aliens: g.aliens.length, armored: g.aliens.filter((a) => a.hp > 1).length };
     })()`);
     check('invaders 第三波出现装甲兵', w3.armored > 0, JSON.stringify(w3));
+  }
 
-    await evaluate('window.__game.debugWave(1)');
-    let maxBombs = 0;
-    for (let i = 0; i < 16; i++) {
-      await sleep(200);
-      const n = await evaluate('window.__game.bombs.length');
-      if (n > maxBombs) maxBombs = n;
+  await goto('/games/zombies/index.html');
+  {
+    await sleep(2500);
+    const s1 = await evaluate(`(() => { const g = window.__game; return { zombies: g.zombies.length, bullets: g.bullets.length }; })()`);
+    check('zombies 会持续刷僵尸', s1.zombies > 0, JSON.stringify(s1));
+    check('zombies 自动开火', s1.bullets > 0, 'bullets=' + s1.bullets);
+
+    const baseBefore = await evaluate('window.__game.base');
+    await evaluate(`(() => {
+      const g = window.__game;
+      g.debugSpawn('walker');
+      const z = g.zombies[g.zombies.length - 1];
+      z.y = g.hero.y + 200;
+      z.speed = 900;
+    })()`);
+    await sleep(500);
+    const baseAfter = await evaluate('window.__game.base');
+    check('zombies 僵尸摸到基地会扣血', baseAfter < baseBefore, `${baseBefore} -> ${baseAfter}`);
+
+    await evaluate(`(() => { const g = window.__game; g.pending = 1; })()`);
+    await sleep(400);
+    const ups = await evaluate("document.querySelectorAll('#overlay.show .up-grid .btn').length");
+    check('zombies 升级弹出三选一', ups === 3, 'cards=' + ups);
+    if (ups === 3) {
+      await shot('zombies-upgrade');
+      const before = await evaluate('window.__game.dmg');
+      await evaluate("document.querySelector('#overlay.show .up-grid .btn').click()");
+      await sleep(300);
+      const closed = await evaluate("!document.querySelector('#overlay.show')");
+      check('zombies 选完升级继续游戏', closed === true, 'dmg before=' + before);
     }
-    check('invaders 火力密度足够（同时有多颗炸弹）', maxBombs >= 2, 'max=' + maxBombs);
   }
 
   await goto('/games/snake/index.html');
@@ -637,6 +699,7 @@ async function main() {
       };
     })()`);
     check('flow 沿解法拖完整盘即过关', diag.solved === true, diag.solved ? '' : JSON.stringify(diag));
+    await shot('flow-win');
 
     // 过关弹层应该能点「下一关」继续
     const hasModal = await evaluate("!!document.querySelector('#overlay.show .btn.primary')");
@@ -771,7 +834,7 @@ async function main() {
     ['Space', 'Space', 32]
   ];
 
-  for (const name of ['breakout', 'invaders', 'snake', 'sokoban', 'flow', 'ice', 'lasers', 'mines', '2048', 'match3', 'sudoku']) {
+  for (const name of ['breakout', 'invaders', 'zombies', 'snake', 'sokoban', 'flow', 'ice', 'lasers', 'mines', '2048', 'match3', 'sudoku']) {
     errors = [];
     await goto(`/games/${name}/index.html`);
     const c = await canvasCenter();

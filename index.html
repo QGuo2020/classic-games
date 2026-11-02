@@ -15,7 +15,7 @@
   <header class="hero">
     <div>
       <div class="brand-mark">Classic Arcade</div>
-      <h1>十一个<em>经典小游戏</em>，<br>点开就能玩。</h1>
+      <h1>十二个<em>经典小游戏</em>，<br>点开就能玩。</h1>
       <p>纯原生 JavaScript + Canvas，零依赖、零构建、无需联网。每个游戏都是闯关制：清掉一关，下一关更难一点。</p>
     </div>
     <div class="hero-side">
@@ -25,7 +25,7 @@
   </header>
 
   <nav class="filters" id="filters" aria-label="分类筛选">
-    <button class="chip" data-cat="all" aria-pressed="true">全部 <span id="countAll">11</span></button>
+    <button class="chip" data-cat="all" aria-pressed="true">全部 <span id="countAll">12</span></button>
     <button class="chip" data-cat="arcade" aria-pressed="false">街机动作</button>
     <button class="chip" data-cat="puzzle" aria-pressed="false">益智解谜</button>
     <button class="chip" data-cat="casual" aria-pressed="false">休闲消除</button>
@@ -71,9 +71,33 @@
           <div class="card-en">Invaders</div>
         </div>
       </div>
-      <p class="card-desc">外星舰队整体推进，越打越快。守住防线，清空一波进下一波。</p>
+      <p class="card-desc">自动开火，捡 P 升级武器：双发 → 三发 → S 弹 → 激光。外星舰队一波比一波密。</p>
       <div class="card-foot">
         <span class="tag" data-progress="invaders">波次关卡</span>
+        <span class="play">开始</span>
+      </div>
+    </a>
+
+    <a class="card" href="./games/zombies/index.html" data-cat="arcade" data-slug="zombies">
+      <div class="card-top">
+        <span class="card-icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <circle cx="12" cy="12" r="9" stroke-opacity=".35"/>
+            <path d="M8.5 9.5a3.6 3.6 0 0 1 7 0v3.4a3.4 3.4 0 0 1-3.4 3.4h-.2a3.4 3.4 0 0 1-3.4-3.4z"/>
+            <circle cx="10.3" cy="11" r=".9" fill="currentColor" stroke="none"/>
+            <circle cx="13.7" cy="11" r=".9" fill="currentColor" stroke="none"/>
+            <path d="M10.2 15.2h3.6" stroke-linecap="round"/>
+            <path d="M12 2.6v1.6M21.4 12h-1.6M12 21.4v-1.6M2.6 12h1.6" stroke-linecap="round" stroke-opacity=".6"/>
+          </svg>
+        </span>
+        <div>
+          <div class="card-name">僵尸围城</div>
+          <div class="card-en">Zombie Defense</div>
+        </div>
+      </div>
+      <p class="card-desc">自动瞄准开火，挡住一波波僵尸。升级三选一，看你能守住基地多少波。</p>
+      <div class="card-foot">
+        <span class="tag" data-progress="zombies">无限波次</span>
         <span class="play">开始</span>
       </div>
     </a>
